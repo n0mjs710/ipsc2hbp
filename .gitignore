@@ -1,0 +1,17 @@
+.DS_Store
+.dropbox
+*.out
+Icon
+*.pyc
+*.bak
+*.lcl
+*.conf
+hblink.cfg
+hb_routing_rules.py
+*.config
+*.json
+*.pickle
+*.c
+*.cpp
+*.o
+*.h
