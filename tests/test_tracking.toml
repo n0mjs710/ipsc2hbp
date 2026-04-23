@@ -1,0 +1,36 @@
+# Test config for TRACKING mode resilience tests.
+# HBP only connects when an IPSC peer is registered.
+
+[global]
+log_level = "DEBUG"
+
+[ipsc]
+bind_ip            = "127.0.0.1"
+bind_port          = 50000
+ipsc_master_id     = 9999999
+ipsc_peer_id       = 3120000
+registration_mode  = "STRICT"
+auth_enabled       = false
+auth_key           = ""
+keepalive_watchdog = 12
+
+[hbp]
+master_ip   = "127.0.0.1"
+master_port = 62031
+id_match    = "MATCH"
+passphrase  = "passw0rd"
+hbp_mode    = "TRACKING"
+
+callsign    = "W1ABC"
+rx_freq     = "444000000"
+tx_freq     = "449000000"
+tx_power    = "25"
+colorcode   = "1"
+latitude    = "38.8500"
+longitude   = "-097.6114"
+height      = "10"
+location    = "Test"
+description = "Test bridge"
+url         = ""
+software_id = "ipsc2hbp"
+package_id  = "1.0.0"

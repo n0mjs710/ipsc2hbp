@@ -18,6 +18,7 @@ Stdin commands (once a peer is connected):
 import argparse
 import asyncio
 import os
+import stat
 import struct
 import sys
 from hashlib import sha256
@@ -40,23 +41,25 @@ from hbp.const import (
 class FakeHBPMaster(asyncio.DatagramProtocol):
 
     def __init__(self, args):
-        self._passphrase  = args.passphrase.encode()
-        self._auto_dmrd   = args.auto_dmrd
-        self._transport   = None
-        self._peer_addr   = None
-        self._peer_id     = None
-        self._state       = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → CONNECTED
-        self._salt        = os.urandom(4)
-        self._stdin_task  = None
-        self._auto_task   = None
+        self._passphrase       = args.passphrase.encode()
+        self._auto_dmrd        = args.auto_dmrd
+        self._auto_nak_after   = args.auto_nak_after
+        self._auto_close_after = args.auto_close_after
+        self._transport        = None
+        self._peer_addr        = None
+        self._peer_id          = None
+        self._state            = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → CONNECTED
+        self._salt             = os.urandom(4)
+        self._stdin_task       = None
+        self._auto_task        = None
 
     def connection_made(self, transport):
         self._transport = transport
         host, port = transport.get_extra_info('sockname')
         print(f'[fake-master] Listening on {host}:{port}')
         loop = asyncio.get_event_loop()
-        if self._auto_dmrd:
-            self._auto_task = loop.create_task(self._auto_dmrd_loop())
+        if self._auto_dmrd or self._auto_nak_after or self._auto_close_after:
+            self._auto_task = loop.create_task(self._auto_sequence_loop())
         else:
             self._stdin_task = loop.create_task(self._stdin_loop())
 
@@ -70,21 +73,22 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
         if len(data) < 4:
             return
 
-        # Longest-prefix dispatch
-        if len(data) >= 4 and data[:4] == HBPF_RPTL:
+        # Longest-prefix dispatch (longer prefixes must be checked before shorter ones)
+        if len(data) >= 7 and data[:7] == HBPF_RPTPING:
+            self._on_rptping(data, addr)
+        elif len(data) >= len(HBPF_RPTCL) and data[:len(HBPF_RPTCL)] == HBPF_RPTCL:
+            peer_id = int.from_bytes(data[len(HBPF_RPTCL):len(HBPF_RPTCL)+4], 'big') \
+                      if len(data) >= len(HBPF_RPTCL) + 4 else 0
+            print(f'[fake-master] ← RPTCL from peer_id={peer_id} — peer disconnected')
+            self._state = 'IDLE'
+            self._peer_addr = None
+            self._peer_id   = None
+        elif len(data) >= 4 and data[:4] == HBPF_RPTL:
             self._on_rptl(data, addr)
         elif len(data) >= 4 and data[:4] == HBPF_RPTK:
             self._on_rptk(data, addr)
         elif len(data) >= 4 and data[:4] == HBPF_RPTC:
             self._on_rptc(data, addr)
-        elif len(data) >= 7 and data[:7] == HBPF_RPTPING:
-            self._on_rptping(data, addr)
-        elif len(data) >= 4 and data[:4] == HBPF_RPTCL:
-            peer_id = int.from_bytes(data[4:8], 'big') if len(data) >= 8 else 0
-            print(f'[fake-master] ← RPTCL from peer_id={peer_id} — peer disconnected')
-            self._state = 'IDLE'
-            self._peer_addr = None
-            self._peer_id   = None
         elif len(data) >= 4 and data[:4] == HBPF_DMRD:
             self._on_dmrd(data, addr)
         else:
@@ -242,30 +246,50 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
         self._state = 'IDLE'
 
     # ------------------------------------------------------------------
-    # Auto-DMRD loop (background testing)
+    # Auto-sequence loop (background testing)
     # ------------------------------------------------------------------
 
-    async def _auto_dmrd_loop(self):
-        """Wait for connection, send TS1+TS2 calls, then keep running."""
-        for _ in range(30):
-            await asyncio.sleep(0.5)
+    async def _wait_connected(self, timeout: float = 15.0) -> bool:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
             if self._state == 'CONNECTED':
-                break
-        if self._state != 'CONNECTED':
-            print('[fake-master] auto-dmrd: timed out waiting for connection')
+                return True
+            await asyncio.sleep(0.2)
+        return False
+
+    async def _auto_sequence_loop(self):
+        """Background test driver: send auto-dmrd, auto-nak, or auto-close."""
+        if not await self._wait_connected():
+            print('[fake-master] auto: timed out waiting for connection')
             return
-        # Extra delay to allow IPSC peer to register with bridge before forwarding
-        await asyncio.sleep(4)
-        self._send_call(ts=1)
-        await asyncio.sleep(0.5)
-        self._send_call(ts=2)
+
+        if self._auto_dmrd:
+            # Extra delay to allow IPSC peer to register with bridge before forwarding
+            await asyncio.sleep(4)
+            self._send_call(ts=1)
+            await asyncio.sleep(0.5)
+            self._send_call(ts=2)
+
+        if self._auto_nak_after:
+            await asyncio.sleep(self._auto_nak_after)
+            print(f'[fake-master] auto: sending MSTNAK after {self._auto_nak_after}s')
+            self._send_nak()
+
+        if self._auto_close_after:
+            await asyncio.sleep(self._auto_close_after)
+            print(f'[fake-master] auto: sending MSTCL after {self._auto_close_after}s')
+            self._send_mstcl()
 
     # ------------------------------------------------------------------
     # Stdin command loop
     # ------------------------------------------------------------------
 
     async def _stdin_loop(self):
-        if not sys.stdin.isatty():
+        try:
+            mode = os.fstat(sys.stdin.fileno()).st_mode
+            if not (stat.S_ISFIFO(mode) or sys.stdin.isatty()):
+                return
+        except Exception:
             return
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
@@ -309,7 +333,11 @@ def main():
     ap.add_argument('--bind',       default='127.0.0.1', help='Bind address (default 127.0.0.1)')
     ap.add_argument('--passphrase', default='passw0rd', help='HBP passphrase (default passw0rd)')
     ap.add_argument('--auto-dmrd', action='store_true', dest='auto_dmrd',
-                    help='Send TS1+TS2 calls automatically after connection then exit')
+                    help='Send TS1+TS2 voice calls automatically after connection')
+    ap.add_argument('--auto-nak-after', default=0, type=float, dest='auto_nak_after',
+                    help='Send MSTNAK N seconds after connection (0=disabled)')
+    ap.add_argument('--auto-close-after', default=0, type=float, dest='auto_close_after',
+                    help='Send MSTCL N seconds after connection (0=disabled)')
     args = ap.parse_args()
 
     loop = asyncio.new_event_loop()

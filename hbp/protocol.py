@@ -100,6 +100,10 @@ class _HBPProtocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc):
         log.warning('HBP socket error: %s', exc)
+        if self._state != 'DISCONNECTED':
+            if self._state == 'CONNECTED':
+                self._translator.hbp_disconnected()
+            self._disconnect(send_rptcl=False)
 
     def datagram_received(self, data: bytes, addr):
         if len(data) < 4:

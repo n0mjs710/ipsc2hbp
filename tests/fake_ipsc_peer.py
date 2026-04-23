@@ -17,10 +17,11 @@ import argparse
 import asyncio
 import binascii
 import hmac as hmac_mod
+import os
 import socket
+import stat
 import struct
 import sys
-import os
 from hashlib import sha1
 from time import time
 
@@ -271,7 +272,11 @@ class FakeIPSCPeer(asyncio.DatagramProtocol):
                 self._send_alive()
 
     async def _stdin_loop(self):
-        if not sys.stdin.isatty():
+        try:
+            mode = os.fstat(sys.stdin.fileno()).st_mode
+            if not (stat.S_ISFIFO(mode) or sys.stdin.isatty()):
+                return
+        except Exception:
             return
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
