@@ -33,7 +33,7 @@ The sample file has comments explaining each option.
 ## 4 — Test it manually (optional but recommended)
 
 ```
-venv/bin/python ipsc2hbp.py -c ipsc2hbp.toml --log-level DEBUG
+venv/bin/python ipsc2hbp.py --log-level DEBUG
 ```
 
 Hit Ctrl-C to stop.

@@ -8,10 +8,13 @@ the asyncio event loop.
 import argparse
 import asyncio
 import logging
+import pathlib
 import signal
 import sys
 
 from config import Config, load as load_config
+
+_DEFAULT_CFG = pathlib.Path(__file__).parent / 'ipsc2hbp.toml'
 
 
 def _setup_logging(level: str):
@@ -30,8 +33,8 @@ def _setup_logging(level: str):
 
 def main():
     ap = argparse.ArgumentParser(description='IPSC to HomeBrew Protocol translator')
-    ap.add_argument('-c', '--config', default='/etc/ipsc2hbp/ipsc2hbp.toml',
-                    help='Path to TOML config file')
+    ap.add_argument('-c', '--config', default=str(_DEFAULT_CFG),
+                    help='Path to TOML config file (default: ipsc2hbp.toml next to this script)')
     ap.add_argument('--log-level', dest='log_level', default=None,
                     help='Override config log level (DEBUG|INFO|WARNING|ERROR)')
     args = ap.parse_args()
