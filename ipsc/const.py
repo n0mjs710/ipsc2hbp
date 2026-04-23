@@ -58,17 +58,18 @@ END_MSK     = 0b01000000   # bit 6: 1=call end (VOICE_TERM already sent)
 # GROUP_VOICE packet field offsets — confirmed from DMRlink IPSC_Bridge.py
 # dumpIPSCFrame() and dmrlink.py datagramReceived().
 # ---------------------------------------------------------------------------
-GV_OPCODE_OFF    = 0
-GV_PEER_ID_OFF   = 1    # bytes 1–4:   source peer radio ID (4 bytes)
-GV_IPSC_SEQ_OFF  = 5    # byte  5:     IPSC sequence number (1 byte)
-GV_SRC_SUB_OFF   = 6    # bytes 6–8:   source subscriber ID (3 bytes)
-GV_DST_GROUP_OFF = 9    # bytes 9–11:  destination group ID / TGID (3 bytes)
-GV_CALL_TYPE_OFF = 12   # byte  12:    call type (1 byte)
-GV_CALL_CTRL_OFF = 13   # bytes 13–16: call ctrl info (4 bytes, unknown detail)
-GV_CALL_INFO_OFF = 17   # byte  17:    call info — TS_CALL_MSK and END_MSK
-GV_RTP_OFF       = 18   # bytes 18–29: RTP header (12 bytes: seq, timestamp, SSRC)
-GV_BURST_TYPE_OFF = 30  # byte  30:    burst data type (payload type)
-GV_PAYLOAD_OFF    = 31  # bytes 31–64: 34-byte byte-swapped DMR payload
+GV_PEER_ID_OFF    = 1    # bytes 1–4:   source peer radio ID (4 bytes)
+GV_IPSC_SEQ_OFF   = 5    # byte  5:     IPSC sequence number (1 byte)
+GV_SRC_SUB_OFF    = 6    # bytes 6–8:   source subscriber ID (3 bytes)
+GV_DST_GROUP_OFF  = 9    # bytes 9–11:  destination group ID / TGID (3 bytes)
+GV_CALL_INFO_OFF  = 17   # byte  17:    call info — TS_CALL_MSK and END_MSK
+GV_BURST_TYPE_OFF = 30   # byte  30:    burst data type (payload type)
+GV_PAYLOAD_OFF    = 31   # bytes 31+:   burst payload (variable length by type)
 
-GV_MIN_LEN      = 65   # minimum GROUP_VOICE length without auth digest
-AUTH_DIGEST_LEN = 10   # HMAC-SHA1 digest bytes appended when auth enabled
+# Minimum GROUP_VOICE length we will accept (must reach byte 30 for burst_type):
+#   SLOT1/SLOT2_VOICE: 52 bytes (31-byte header + 2-byte pad + 19-byte AMBE)
+#   VOICE_TERM:        54 bytes
+#   VOICE_HEAD:        57 bytes
+GV_MIN_LEN      = 31    # header through burst_type byte
+
+AUTH_DIGEST_LEN = 10    # HMAC-SHA1 digest bytes appended when auth enabled

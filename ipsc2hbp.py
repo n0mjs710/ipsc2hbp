@@ -54,7 +54,7 @@ def main():
 
     from ipsc.protocol import IPSCProtocol
     from hbp.protocol import HBPClient
-    from translate.bridge import CallTranslator
+    from translate.translator import CallTranslator
 
     translator = CallTranslator(cfg)
     ipsc_proto = IPSCProtocol(cfg, translator)

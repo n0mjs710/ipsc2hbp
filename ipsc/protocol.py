@@ -23,17 +23,11 @@ from ipsc.const import (
     MASTER_ALIVE_REQ, MASTER_ALIVE_REPLY,
     DE_REG_REQ, DE_REG_REPLY,
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
-    RPT_WAKE_UP, UNKNOWN_COLLISION, XCMP_XNL,
-    CALL_CONFIRMATION, TXT_MESSAGE_ACK,
-    CALL_MON_STATUS, CALL_MON_RPT, CALL_MON_NACK,
-    PEER_REG_REQ, PEER_REG_REPLY,
-    PEER_ALIVE_REQ, PEER_ALIVE_REPLY,
-    VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE,
-    IPSC_VER, TS_CALL_MSK, END_MSK,
-    VOICE_CALL_MSK, DATA_CALL_MSK, PKT_AUTH_MSK, MSTR_PEER_MSK,
-    GV_PEER_ID_OFF, GV_IPSC_SEQ_OFF,
-    GV_SRC_SUB_OFF, GV_DST_GROUP_OFF,
-    GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF, GV_PAYLOAD_OFF,
+    UNKNOWN_COLLISION, XCMP_XNL,
+    VOICE_HEAD, VOICE_TERM,
+    IPSC_VER, TS_CALL_MSK,
+    VOICE_CALL_MSK, PKT_AUTH_MSK, MSTR_PEER_MSK,
+    GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF,
     GV_MIN_LEN, AUTH_DIGEST_LEN,
 )
 
@@ -229,11 +223,14 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         if not self._registered:
             return
         if len(data) < GV_MIN_LEN:
-            log.debug('GROUP_VOICE too short (%d bytes) from %s:%d', len(data), host, port)
+            log.warning('GROUP_VOICE too short (%d bytes) from %s:%d', len(data), host, port)
             return
 
-        burst_type = data[GV_BURST_TYPE_OFF]
-        call_info  = data[GV_CALL_INFO_OFF]
+        burst_type = data[GV_BURST_TYPE_OFF]   # byte 30 — always present
+        call_info  = data[GV_CALL_INFO_OFF]    # byte 17
+
+        log.debug('GROUP_VOICE len=%d burst=0x%02x raw[0:32]=%s from %s:%d',
+                  len(data), burst_type, data[:32].hex(), host, port)
 
         # Timeslot: for VOICE_HEAD/VOICE_TERM read from call_info byte 17;
         # for SLOT1/SLOT2_VOICE it is encoded in bit 7 of burst_type.
@@ -242,7 +239,6 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         else:
             ts = 2 if (burst_type & 0x80) else 1
 
-        log.debug('GROUP_VOICE burst_type=0x%02x ts=%d from %s:%d', burst_type, ts, host, port)
         self._translator.ipsc_voice_received(data, ts, burst_type)
 
     # ------------------------------------------------------------------
