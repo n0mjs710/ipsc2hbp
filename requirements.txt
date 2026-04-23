@@ -1,0 +1,2 @@
+dmr-utils3>=0.1.29
+bitarray>=2.5.0

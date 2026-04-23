@@ -1,0 +1,82 @@
+# ipsc2hbp.toml — configuration for ipsc2hbp
+#
+# Copy this file to ipsc2hbp.toml (or /etc/ipsc2hbp/ipsc2hbp.toml) and
+# edit for your deployment.  The live config is gitignored.
+
+[global]
+# Logging verbosity: "DEBUG" | "INFO" | "WARNING" | "ERROR"
+# DEBUG is very noisy (every burst frame). Use INFO for normal operation.
+log_level = "INFO"
+
+[ipsc]
+# IP address to bind the IPSC master UDP socket.
+# Use "0.0.0.0" to listen on all interfaces.
+bind_ip   = "0.0.0.0"
+bind_port = 50000
+
+# Radio ID this translator presents as the IPSC master node.
+# This is NOT the repeater's radio ID — use a unique value for this system.
+ipsc_master_id = 9999999
+
+# Radio ID of the Motorola repeater (the IPSC peer).
+# Also used as the HBP repeater ID by default (see hbp_repeater_id below).
+ipsc_peer_id = 3120000
+
+# "STRICT": drop registration if peer radio ID ≠ ipsc_peer_id (log warning)
+# "LOOSE":  accept any peer radio ID, log warning if it doesn't match
+registration_mode = "STRICT"
+
+# IPSC HMAC-SHA1 authentication.
+# Must match the auth key programmed in the repeater codeplug.
+auth_enabled = false
+
+# Auth key: up to 40 hex characters (20 bytes).
+# Shorter keys are left-zero-padded to 40 hex chars automatically.
+# Leave empty ("") when auth_enabled = false.
+auth_key = ""
+
+# Watchdog timeout (seconds): how long without a keep-alive before the
+# repeater is declared lost.  Set generously for variable firewall timers.
+# Minimum: 5.  Recommended: 60.
+keepalive_watchdog = 60
+
+[hbp]
+# Upstream HBP master to connect to (BrandMeister, DMR+, FreeDMR, HBlink4).
+master_ip   = "127.0.0.1"
+master_port = 62031
+
+# HBP repeater ID sent in all HBP packets.
+# Default (omit or set to 0): use ipsc_peer_id — recommended for passthrough.
+# hbp_repeater_id = 3120000
+
+# "MATCH": refuse to start if hbp_repeater_id ≠ ipsc_peer_id (enforces passthrough)
+# "ALLOW": allow different IDs (special deployments only)
+id_match = "MATCH"
+
+# Passphrase for the HBP master (must match the master's configuration).
+passphrase = "passw0rd"
+
+# HBP connection mode:
+# "TRACKING":   Connect HBP only while an IPSC peer is registered.
+#               Disconnect when the repeater goes away. Recommended.
+# "PERSISTENT": Keep the HBP connection up regardless of repeater state.
+#               Useful to keep the system visible on network dashboards.
+hbp_mode = "TRACKING"
+
+# ---------------------------------------------------------------------------
+# RPTC announcement fields — sent to the HBP master during handshake.
+# BrandMeister validates field widths strictly; fill these accurately.
+# ---------------------------------------------------------------------------
+callsign    = "W1ABC"
+rx_freq     = "444000000"   # Hz, 9 ASCII digits
+tx_freq     = "449000000"   # Hz, 9 ASCII digits
+tx_power    = "25"          # Watts, up to 2 digits
+colorcode   = "1"           # DMR colour code (1–15)
+latitude    = "38.8500"     # decimal degrees, up to 8 characters
+longitude   = "-097.6114"   # decimal degrees, up to 9 characters
+height      = "10"          # antenna height above ground, metres, up to 3 digits
+location    = "Smalltown KS"
+description = "IPSC-HBP Bridge"
+url         = ""
+software_id = "ipsc2hbp"
+package_id  = "1.0.0"

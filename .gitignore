@@ -1,0 +1,32 @@
+# Live configuration — never commit; copy ipsc2hbp.toml.sample to get started
+ipsc2hbp.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Claude Code session files
+.claude/
+
+# Test artefacts
+tests/test.toml
+/tmp/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
