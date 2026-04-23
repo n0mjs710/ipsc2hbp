@@ -194,7 +194,15 @@ class CallTranslator:
         flags     = HBPF_TGID_TS2 if ts == 2 else 0x00
 
         if burst_type == VOICE_HEAD:
-            self._out_stream_id = os.urandom(4)
+            if self._out_stream_id is None:
+                self._out_stream_id = os.urandom(4)
+                log.info('Outbound call start: src=%d  tg=%d  ts=%d  stream=%s',
+                         int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                         ts, self._out_stream_id.hex())
+            else:
+                # Repeater sent duplicate VOICE_HEAD mid-call; reuse existing stream_id
+                # so HBlink doesn't see contention.
+                log.debug('Duplicate VOICE_HEAD — keeping stream=%s', self._out_stream_id.hex())
             self._out_frame_pos = 0
             lc = LC_OPT + dst_group + src_sub
             self._out_lc     = lc
@@ -209,9 +217,6 @@ class CallTranslator:
             )
             payload_33 = frame_bits.tobytes()
             flags |= HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VHEAD
-            log.info('Outbound call start: src=%d  tg=%d  ts=%d  stream=%s',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
-                     ts, self._out_stream_id.hex())
 
         elif burst_type == VOICE_TERM:
             if self._out_stream_id is None:
