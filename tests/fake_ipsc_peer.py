@@ -24,6 +24,8 @@ import os
 from hashlib import sha1
 from time import time
 
+sys.stdout.reconfigure(line_buffering=True)
+
 # Allow running from the project root without installing
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -128,7 +130,10 @@ class FakeIPSCPeer(asyncio.DatagramProtocol):
         self._send_reg_req()
         loop = asyncio.get_event_loop()
         self._ka_task    = loop.create_task(self._keepalive_loop())
-        self._stdin_task = loop.create_task(self._stdin_loop())
+        if self._args.auto_call:
+            self._stdin_task = loop.create_task(self._auto_call_loop())
+        else:
+            self._stdin_task = loop.create_task(self._stdin_loop())
 
     def connection_lost(self, exc):
         print(f'[fake-peer] Connection lost: {exc}')
@@ -238,6 +243,17 @@ class FakeIPSCPeer(asyncio.DatagramProtocol):
     # Async tasks
     # ------------------------------------------------------------------
 
+    async def _auto_call_loop(self):
+        """Send a call on each timeslot then exit — used for background testing."""
+        await asyncio.sleep(2)   # wait for registration
+        if self._registered:
+            self._send_call(timeslot=1)
+            await asyncio.sleep(0.5)
+            self._send_call(timeslot=2)
+        loop = asyncio.get_event_loop()
+        await asyncio.sleep(2)
+        loop.stop()
+
     async def _keepalive_loop(self):
         while True:
             await asyncio.sleep(5)
@@ -287,6 +303,8 @@ def main():
                     help='Auth key as hex string (empty = no auth)')
     ap.add_argument('--burst-count', default=6, type=int, dest='burst_count',
                     help='Voice bursts per test call (default 6)')
+    ap.add_argument('--auto-call', action='store_true', dest='auto_call',
+                    help='Send TS1+TS2 calls automatically after registration then exit')
     args = ap.parse_args()
 
     # Parse auth key

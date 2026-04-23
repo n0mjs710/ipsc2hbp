@@ -1,8 +1,8 @@
 """
 ipsc2hbp — entry point.
 
-Wires IPSCProtocol, HBPProtocol, and CallTranslator together and runs
-the asyncio event loop.  Phase 3: HBP client wired; translator still stub.
+Wires IPSCProtocol, HBPClient, and CallTranslator together and runs
+the asyncio event loop.
 """
 
 import argparse
@@ -28,38 +28,6 @@ def _setup_logging(level: str):
             h.setFormatter(logging.Formatter(fmt))
 
 
-class _StubTranslator:
-    """Stub translator — used until bridge.py is implemented (Phase 4)."""
-
-    def peer_registered(self, peer_id: bytes, host: str, port: int):
-        logging.getLogger('stub').info(
-            'peer_registered: id=%d  %s:%d', int.from_bytes(peer_id, 'big'), host, port
-        )
-
-    def peer_lost(self):
-        logging.getLogger('stub').warning('peer_lost')
-
-    def ipsc_voice_received(self, data: bytes, ts: int, burst_type: int):
-        logging.getLogger('stub').debug(
-            'ipsc_voice_received ts=%d burst_type=0x%02x len=%d', ts, burst_type, len(data)
-        )
-
-    def hbp_connected(self):
-        logging.getLogger('stub').info('hbp_connected')
-
-    def hbp_disconnected(self):
-        logging.getLogger('stub').warning('hbp_disconnected')
-
-    def hbp_voice_received(self, dmrd: bytes):
-        logging.getLogger('stub').debug('hbp_voice_received len=%d', len(dmrd))
-
-    def is_hbp_connected(self) -> bool:
-        return False
-
-    def is_ipsc_registered(self) -> bool:
-        return False
-
-
 def main():
     ap = argparse.ArgumentParser(description='IPSC to HomeBrew Protocol translator')
     ap.add_argument('-c', '--config', default='/etc/ipsc2hbp/ipsc2hbp.toml',
@@ -77,20 +45,22 @@ def main():
     _setup_logging(log_level)
 
     log = logging.getLogger('ipsc2hbp')
-    log.info('ipsc2hbp starting — IPSC master_id=%d  peer_id=%d',
-             cfg.ipsc_master_id, cfg.ipsc_peer_id)
-
-    translator = _StubTranslator()
+    log.info('ipsc2hbp starting — IPSC master_id=%d  peer_id=%d  HBP %s:%d  mode=%s',
+             cfg.ipsc_master_id, cfg.ipsc_peer_id,
+             cfg.hbp_master_ip, cfg.hbp_master_port, cfg.hbp_mode)
 
     from ipsc.protocol import IPSCProtocol
     from hbp.protocol import HBPClient
+    from translate.bridge import CallTranslator
+
+    translator = CallTranslator(cfg)
+    ipsc_proto = IPSCProtocol(cfg, translator)
+    hbp_client = HBPClient(cfg, translator)
+    translator.set_protocols(ipsc_proto, hbp_client)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    hbp_client = HBPClient(cfg, translator)
-
-    # Graceful shutdown
     def _shutdown(signum, frame):
         log.info('Signal %d received — shutting down', signum)
         hbp_client.stop()
@@ -99,8 +69,6 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, _shutdown)
 
-    # Start IPSC master endpoint
-    ipsc_proto = IPSCProtocol(cfg, translator)
     ipsc_coro = loop.create_datagram_endpoint(
         lambda: ipsc_proto,
         local_addr=(cfg.ipsc_bind_ip, cfg.ipsc_bind_port),
@@ -108,8 +76,7 @@ def main():
 
     try:
         loop.run_until_complete(ipsc_coro)
-        log.info('IPSC master endpoint up — listening on %s:%d',
-                 cfg.ipsc_bind_ip, cfg.ipsc_bind_port)
+        log.info('IPSC master endpoint up — %s:%d', cfg.ipsc_bind_ip, cfg.ipsc_bind_port)
         hbp_client.start(loop)
         loop.run_forever()
     except OSError as exc:

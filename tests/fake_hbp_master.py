@@ -22,6 +22,9 @@ import struct
 import sys
 from hashlib import sha256
 
+# Force line-buffered stdout so output appears even when redirected to a file
+sys.stdout.reconfigure(line_buffering=True)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hbp.const import (
