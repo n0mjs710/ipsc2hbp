@@ -200,8 +200,10 @@ class CallTranslator:
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
                          ts, self._out_stream_id.hex())
             else:
-                # Repeater sent duplicate VOICE_HEAD mid-call; reuse existing stream_id
-                # so HBlink doesn't see contention.
+                # Motorola radios fire VOICE_HEAD twice at call start — once on LC
+                # detection, once confirmed. MMDVMHost absorbs this at the driver
+                # layer; we see it raw over IPSC. Reuse the existing stream_id so
+                # HBlink doesn't flag stream contention.
                 log.debug('Duplicate VOICE_HEAD — keeping stream=%s', self._out_stream_id.hex())
             self._out_frame_pos = 0
             lc = LC_OPT + dst_group + src_sub
