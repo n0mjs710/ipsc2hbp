@@ -29,7 +29,7 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hbp.const import (
-    HBPF_RPTL, HBPF_RPTK, HBPF_RPTC, HBPF_RPTPING, HBPF_RPTCL,
+    HBPF_RPTL, HBPF_RPTK, HBPF_RPTC, HBPF_RPTO, HBPF_RPTPING, HBPF_RPTCL,
     HBPF_RPTACK, HBPF_MSTNAK, HBPF_MSTPONG, HBPF_MSTCL,
     HBPF_DMRD, DMRD_LEN,
     HBPF_TGID_TS2,
@@ -48,7 +48,7 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
         self._transport        = None
         self._peer_addr        = None
         self._peer_id          = None
-        self._state            = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → CONNECTED
+        self._state            = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → WAIT_RPTO → CONNECTED
         self._salt             = os.urandom(4)
         self._stdin_task       = None
         self._auto_task        = None
@@ -89,6 +89,8 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
             self._on_rptk(data, addr)
         elif len(data) >= 4 and data[:4] == HBPF_RPTC:
             self._on_rptc(data, addr)
+        elif len(data) >= 4 and data[:4] == HBPF_RPTO:
+            self._on_rpto(data, addr)
         elif len(data) >= 4 and data[:4] == HBPF_DMRD:
             self._on_dmrd(data, addr)
         else:
@@ -145,10 +147,24 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
         print(f'[fake-master] ← RPTC  {len(data)} bytes  callsign={callsign!r}')
         reply = HBPF_RPTACK + peer_id
         self._send(reply, addr)
-        print('[fake-master] → RPTACK (config accepted) — CONNECTED')
-        self._state = 'CONNECTED'
+        print('[fake-master] → RPTACK (config accepted) — waiting for RPTO or CONNECTED')
+        self._state = 'WAIT_RPTO'
+
+    def _on_rpto(self, data: bytes, addr):
+        peer_id = data[4:8] if len(data) >= 8 else (self._peer_id or b'\x00\x00\x00\x00')
+        options = data[8:].rstrip(b'\x00').decode(errors='replace') if len(data) > 8 else ''
+        print(f'[fake-master] ← RPTO  options={options!r}')
+        if self._state == 'WAIT_RPTO':
+            self._send(HBPF_RPTACK + peer_id, addr)
+            print('[fake-master] → RPTACK (options accepted) — CONNECTED')
+            self._state = 'CONNECTED'
+        else:
+            print(f'[fake-master] RPTO in unexpected state {self._state}')
 
     def _on_rptping(self, data: bytes, addr):
+        # RPTPING in WAIT_RPTO means client sent no options — advance to CONNECTED
+        if self._state == 'WAIT_RPTO':
+            self._state = 'CONNECTED'
         if self._state != 'CONNECTED':
             return
         peer_id = data[7:11] if len(data) >= 11 else self._peer_id

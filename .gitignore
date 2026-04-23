@@ -19,8 +19,7 @@ env/
 # Claude Code session files
 .claude/
 
-# Test artefacts
-tests/test.toml
+# Temporary files
 /tmp/
 
 # Editor / OS

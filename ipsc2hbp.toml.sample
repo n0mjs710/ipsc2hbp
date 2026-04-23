@@ -64,6 +64,17 @@ passphrase = "passw0rd"
 hbp_mode = "TRACKING"
 
 # ---------------------------------------------------------------------------
+# Options string — sent as RPTO after RPTC if non-empty.
+# Used to subscribe to specific TGIDs on HBlink4 and compatible servers.
+# Format: "TS1=tgid,tgid,...;TS2=tgid,tgid,..."
+# Use "*" for all TGIDs on a slot.  Leave empty to skip the RPTO step.
+# Examples:
+#   options = "TS1=91,310;TS2=*"
+#   options = ""
+# ---------------------------------------------------------------------------
+options = ""
+
+# ---------------------------------------------------------------------------
 # RPTC announcement fields — sent to the HBP master during handshake.
 # BrandMeister validates field widths strictly; fill these accurately.
 # ---------------------------------------------------------------------------

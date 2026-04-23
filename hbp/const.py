@@ -12,6 +12,7 @@ HBPF_RPTACK  = b'RPTACK'  # ACK at every handshake step (master → repeater)
 HBPF_MSTNAK  = b'MSTNAK'  # NAK from master
 HBPF_RPTPING = b'RPTPING' # Keep-alive ping (repeater → master)
 HBPF_MSTPONG = b'MSTPONG' # Keep-alive pong (master → repeater)
+HBPF_RPTO    = b'RPTO'    # Options (repeater → master, optional post-RPTC step)
 HBPF_RPTCL   = b'RPTCL'   # Close / disconnect (repeater → master)
 HBPF_MSTCL   = b'MSTCL'   # Close from master (master → repeater)
 
@@ -100,7 +101,10 @@ RPTC_PACKAGE_ID = slice(262, 302)  # 40 bytes
 #   4. Send RPTK + rptr_id(4) + hash(32)          total = 40 bytes
 #   5. Recv RPTACK + rptr_id(4)  → auth accepted
 #   6. Send RPTC + config(298)                    total = 302 bytes
-#   7. Recv RPTACK + rptr_id(4)  → config accepted → CONNECTED
+#   7. Recv RPTACK + rptr_id(4)  → config accepted
+#   8. Send RPTO + rptr_id(4) + options_str(300)  total = 308 bytes  [if options configured]
+#   9. Recv RPTACK + rptr_id(4)  → options accepted → CONNECTED
+#   (steps 8–9 are skipped when options is empty; CONNECTED after step 7)
 #
 # RPTC padding: null bytes (\x00), NOT spaces — from hblink4 _send_outbound_config
 # SLOTS field: always b'3' (both slots enabled)

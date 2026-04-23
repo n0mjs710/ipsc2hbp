@@ -1,5 +1,5 @@
-# Test config for TRACKING mode resilience tests.
-# HBP only connects when an IPSC peer is registered.
+# Test config — used with fake_ipsc_peer.py and fake_hbp_master.py
+# Short watchdog so tests complete quickly.
 
 [global]
 log_level = "DEBUG"
@@ -12,14 +12,14 @@ ipsc_peer_id       = 3120000
 registration_mode  = "STRICT"
 auth_enabled       = false
 auth_key           = ""
-keepalive_watchdog = 12
+keepalive_watchdog = 15
 
 [hbp]
 master_ip   = "127.0.0.1"
 master_port = 62031
 id_match    = "MATCH"
 passphrase  = "passw0rd"
-hbp_mode    = "TRACKING"
+hbp_mode    = "PERSISTENT"
 
 options     = ""
 callsign    = "W1ABC"

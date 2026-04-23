@@ -31,7 +31,7 @@ from time import time
 
 from config import Config
 from hbp.const import (
-    HBPF_RPTL, HBPF_RPTK, HBPF_RPTC, HBPF_RPTPING, HBPF_RPTCL,
+    HBPF_RPTL, HBPF_RPTK, HBPF_RPTC, HBPF_RPTO, HBPF_RPTPING, HBPF_RPTCL,
     HBPF_RPTACK, HBPF_MSTNAK, HBPF_MSTPONG, HBPF_MSTCL,
     HBPF_CMD_RPTA, HBPF_CMD_MSTN, HBPF_CMD_MSTP, HBPF_CMD_MSTC,
     RPTACK_NONCE_OFF, MSTPONG_ID_OFF,
@@ -78,7 +78,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
         self._client     = client
         self._radio_id_b = cfg.hbp_repeater_id.to_bytes(4, 'big')
         self._transport  = None
-        self._state      = 'LOGIN'   # LOGIN → AUTH_SENT → CONFIG_SENT → CONNECTED
+        self._state      = 'LOGIN'   # LOGIN → AUTH_SENT → CONFIG_SENT → [OPTIONS_SENT] → CONNECTED
         self._last_pong  = 0.0
         self._ping_task  = None
         self._done       = asyncio.Event()
@@ -153,17 +153,32 @@ class _HBPProtocol(asyncio.DatagramProtocol):
             log.info('HBP: ← RPTACK(auth)  → RPTC (%d bytes)', len(rptc))
 
         elif self._state == 'CONFIG_SENT':
-            # RPTACK: config accepted → connected
-            self._state = 'CONNECTED'
-            self._last_pong = time()
-            loop = asyncio.get_event_loop()
-            self._ping_task = loop.create_task(self._keepalive_loop())
-            log.info('HBP: ← RPTACK(config)  CONNECTED to %s:%d',
+            # RPTACK: config accepted — send RPTO if options are configured
+            if self._cfg.options:
+                opts = self._cfg.options.encode().ljust(300, b'\x00')[:300]
+                self._send_raw(HBPF_RPTO + self._radio_id_b + opts)
+                self._state = 'OPTIONS_SENT'
+                log.info('HBP: ← RPTACK(config)  → RPTO  options=%r', self._cfg.options)
+            else:
+                log.info('HBP: ← RPTACK(config)  CONNECTED to %s:%d',
+                         self._cfg.hbp_master_ip, self._cfg.hbp_master_port)
+                self._become_connected()
+
+        elif self._state == 'OPTIONS_SENT':
+            # RPTACK: options accepted → connected
+            log.info('HBP: ← RPTACK(options)  CONNECTED to %s:%d',
                      self._cfg.hbp_master_ip, self._cfg.hbp_master_port)
-            self._translator.hbp_connected()
+            self._become_connected()
 
         else:
             log.debug('HBP: unexpected RPTACK in state %s', self._state)
+
+    def _become_connected(self):
+        self._state = 'CONNECTED'
+        self._last_pong = time()
+        loop = asyncio.get_event_loop()
+        self._ping_task = loop.create_task(self._keepalive_loop())
+        self._translator.hbp_connected()
 
     def _on_mstpong(self, data: bytes):
         self._last_pong = time()

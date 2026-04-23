@@ -35,6 +35,7 @@ class Config:
     hbp_mode: str
 
     # RPTC announcement fields
+    options: str            # RPTO options string, e.g. "TS1=1,2;TS2=3,4" — empty = no RPTO
     callsign: str
     rx_freq: str
     tx_freq: str
@@ -140,6 +141,7 @@ def load(path: str) -> Config:
     hbp_passphrase = raw_passphrase.encode()
 
     # RPTC fields (all optional with sensible defaults)
+    options     = get_str('hbp', 'options',     required=False, default='')
     callsign    = get_str('hbp', 'callsign',    required=False, default='NOCALL')
     rx_freq     = get_str('hbp', 'rx_freq',     required=False, default='000000000')
     tx_freq     = get_str('hbp', 'tx_freq',     required=False, default='000000000')
@@ -182,6 +184,7 @@ def load(path: str) -> Config:
         id_match=id_match,
         hbp_passphrase=hbp_passphrase,
         hbp_mode=hbp_mode,
+        options=options,
         callsign=callsign,
         rx_freq=rx_freq,
         tx_freq=tx_freq,
