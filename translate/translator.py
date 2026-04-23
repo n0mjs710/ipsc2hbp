@@ -258,6 +258,7 @@ class CallTranslator:
             + bytes([flags])
             + self._out_stream_id
             + payload_33
+            + b'\x00\x00'   # BER + RSSI (synthesised, no RF measurement)
         )
         self._out_seq = (self._out_seq + 1) & 0xFF
         self._hbp.send_dmrd(dmrd)

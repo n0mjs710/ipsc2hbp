@@ -20,11 +20,11 @@ Single Python process. Single asyncio event loop. Two UDP endpoints. No threads.
                 ┌───────────────────────────────────────┐
                 │               ipsc2hbp                │
                 │                                       │
-  Motorola      │  ┌───────────┐    ┌───────────────┐  │       HBP
-  Repeater  UDP │  │  IPSC     │    │  HBP          │  │  UDP
-  (IPSC ────────►  │  master   │◄──►│  peer         ├──┼────────► BrandMeister
-  peer)   ◄─────│  │  :50000   │    │  → master_ip  │  │         DMR+
-                │  └───────────┘    └───────────────┘  │         HBlink4
+  Motorola      │  ┌───────────┐    ┌───────────────┐   │       HBP
+  Repeater  UDP │  │  IPSC     │    │  HBP          │   │  UDP
+  (IPSC ────────►  │  master   │◄──►│  peer         ├───┼────────► BrandMeister
+  peer)   ◄─────│  │  :50000   │    │  → master_ip  │   │         DMR+
+                │  └───────────┘    └───────────────┘   │         HBlink4
                 │         ▲                ▲            │
                 │         └────────────────┘            │
                 │           CallTranslator              │
@@ -338,7 +338,7 @@ On any disconnect (watchdog, MSTNAK, MSTCL, socket error), the connection manage
 
 ### 6.6 DMRD Packet Layout
 
-All voice frames between ipsc2hbp and the HBP master use `DMRD` packets (53 bytes):
+All voice frames between ipsc2hbp and the HBP master use `DMRD` packets (55 bytes — HBlink4 format):
 
 ```
 Bytes  0– 3:  b'DMRD'
@@ -357,6 +357,8 @@ Byte     15:  Flags:
                               Data type (for DATASYNC frames: 0x01=VHEAD, 0x02=VTERM)
 Bytes 16–19:  Stream ID (4 random bytes, constant across a call, new per VOICE_HEAD)
 Bytes 20–52:  33-byte DMR frame payload (264 bits)
+Byte     53:  BER — bit error rate (0x00 for synthesised frames with no RF measurement)
+Byte     54:  RSSI (0x00 for synthesised frames)
 ```
 
 Note: The published HBP spec incorrectly places the timeslot bit at bit 6 and call type at bit 5. The implementation in HBlink (all versions) uses bit 7 for timeslot, which is the authoritative source.
@@ -560,7 +562,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 | TGID translation or rewriting | Same |
 | Private voice calls | Group voice only |
 | Data calls (GROUP_DATA, PVT_DATA) | Dropped silently |
-| XNL / XCMP processing | Never. Can damage repeater RF configuration. |
+| XNL / XCMP processing | ingored |
 | Multiple IPSC peers | One repeater only |
 | Multiple HBP upstream masters | One network server only |
 | Conference, bridging, routing | Not this tool |

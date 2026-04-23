@@ -54,7 +54,7 @@ HBPF_DTYPE_MASK     = 0x0F   # bits 3–0
 # ---------------------------------------------------------------------------
 # DMRD packet layout constants
 # ---------------------------------------------------------------------------
-DMRD_LEN         = 53    # Total DMRD packet length (bytes)
+DMRD_LEN         = 55    # Total DMRD packet length (bytes) — HBlink4 format
 DMRD_MAGIC_OFF   = 0     # bytes 0–3: b'DMRD'
 DMRD_SEQ_OFF     = 4     # byte 4: sequence number (0–255, wraps)
 DMRD_SRC_OFF     = 5     # bytes 5–7: source radio ID (3 bytes, big-endian)
@@ -63,6 +63,8 @@ DMRD_RPTR_OFF    = 11    # bytes 11–14: repeater ID (4 bytes, big-endian)
 DMRD_FLAGS_OFF   = 15    # byte 15: flags (TS, call type, frame type, dtype/vseq)
 DMRD_STREAM_OFF  = 16    # bytes 16–19: stream ID (4 bytes random per call)
 DMRD_PAYLOAD_OFF = 20    # bytes 20–52: 33-byte DMR payload
+DMRD_BER_OFF     = 53    # byte 53: bit error rate (0 for synthesised frames)
+DMRD_RSSI_OFF    = 54    # byte 54: RSSI (0 for synthesised frames)
 
 # ---------------------------------------------------------------------------
 # RPTC config blob layout — 302 bytes total.
