@@ -1,0 +1,23 @@
+# ipsc2hbp.service — systemd unit template
+# See INSTALL.md for installation instructions.
+
+[Unit]
+Description=IPSC to HomeBrew Protocol bridge
+Documentation=https://github.com/n0mjs710/ipsc2hbp
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO__
+ExecStart=__REPO__/venv/bin/python __REPO__/ipsc2hbp.py -c __REPO__/ipsc2hbp.toml
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipsc2hbp
+
+[Install]
+WantedBy=multi-user.target
