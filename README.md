@@ -4,9 +4,9 @@
 
 **WHY THIS EXISTS:**
 
-The previous solution to this problem was a pair of Python 2 applications: `IPSC_Bridge` from DMRlink and `HB_Bridge` from HBlink, running as separate processes and talking to each other over local UDP sockets. It worked, but it required four configuration files, careful coordination between two running processes, and enough fragility that it kept coming apart at inconvenient times. Python 2 is long dead, which only made things worse.
+The previous solution to this problem was a pair of Python 2 applications: `IPSC_Bridge` from DMRlink and `HB_Bridge` from HBlink, running as separate processes and talking to each other over local UDP sockets. It worked, but it required four configuration files, careful coordination between two running processes, and always felt fragile and overly complex. Python 2 is now long dead, which only made things worse.
 
-`ipsc2hbp` replaces all of that with one process, one config file, and no inter-process communication. It speaks IPSC to the repeater and HBP to the upstream server and translates between them in memory. That's the whole job.
+`ipsc2hbp` replaces all of that with one process, one config file, and no inter-process communication. It speaks IPSC to the repeater and HBP to the upstream server and translates between them in memory. Simple and effective!
 
 **DESIGN GOALS:**
 
@@ -18,7 +18,7 @@ The previous solution to this problem was a pair of Python 2 applications: `IPSC
 
 **WHAT IT IS NOT:**
 
-This is not a general-purpose bridge, reflector, or network controller. It does not route between talkgroups, doesn't talk to multiple repeaters, and won't replace HBlink4 for anything beyond the specific use case it was designed for.
+This is not a general-purpose bridge, reflector, or network controller. It does not route between talkgroups, doesn't talk to multiple repeaters. It will be tested to work with HBlink4, but should work with most HBP speaking network servers.
 
 **REQUIREMENTS:**
 
@@ -44,7 +44,7 @@ This work represents the author's interpretation of the Motorola MOTOTRBO IPSC p
 
 ***0x49 DE N0MJS***
 
-Copyright (C) 2025 Cortney T. Buffington, N0MJS <n0mjs@me.com>
+Copyright (C) 2026 Cortney T. Buffington, N0MJS <n0mjs@me.com>
 
 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.
 
