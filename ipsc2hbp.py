@@ -85,6 +85,12 @@ def main():
     except OSError as exc:
         sys.exit(f'Failed to bind IPSC socket: {exc}')
     finally:
+        # Cancel all pending tasks and let them handle CancelledError before closing.
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         log.info('ipsc2hbp stopped')
         loop.close()
 
