@@ -150,6 +150,7 @@ class CallTranslator:
         self._ipsc          = None
         self._hbp           = None
         self._repeater_id_b = cfg.hbp_repeater_id.to_bytes(4, 'big')
+        self._master_id_b   = cfg.ipsc_master_id.to_bytes(4, 'big')
 
         # Outbound call state (IPSC → HBP)
         self._out_stream_id = None   # 4 random bytes, new per call
@@ -162,6 +163,7 @@ class CallTranslator:
         self._in_lc         = None   # 9-byte LC decoded from HBP VOICE_HEAD
         self._in_ipsc_seq   = 0      # IPSC sequence byte at GV offset 5
         self._in_rtp_seq    = 0      # RTP sequence in GV header
+        self._in_rtp_ts     = 0      # RTP timestamp; increments 160/frame (8 kHz, 20 ms)
 
     def set_protocols(self, ipsc_proto, hbp_client):
         self._ipsc = ipsc_proto
@@ -317,8 +319,10 @@ class CallTranslator:
         call_info  = TS_CALL_MSK if ts == 2 else 0x00
 
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq & 0xFFFF)
+        rtp_ts_b  = struct.pack('>I', self._in_rtp_ts  & 0xFFFFFFFF)
         self._in_rtp_seq += 1
-        rtp_header = b'\x80\x00' + rtp_seq_b + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00'
+        self._in_rtp_ts  += 160
+        rtp_header = b'\x80\x00' + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
 
         if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
             lc = LC_OPT + dst_group + src_sub
@@ -340,7 +344,7 @@ class CallTranslator:
 
         gv = (
             bytes([GROUP_VOICE])
-            + self._repeater_id_b          # peer_id — we identify as the repeater
+            + self._master_id_b            # peer_id — we are the IPSC master forwarding audio
             + bytes([self._in_ipsc_seq])
             + src_sub                      # source subscriber (3 bytes)
             + dst_group                    # destination group (3 bytes)
