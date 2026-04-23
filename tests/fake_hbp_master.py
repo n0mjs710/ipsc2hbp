@@ -31,27 +31,34 @@ from hbp.const import (
     HBPF_RPTL, HBPF_RPTK, HBPF_RPTC, HBPF_RPTPING, HBPF_RPTCL,
     HBPF_RPTACK, HBPF_MSTNAK, HBPF_MSTPONG, HBPF_MSTCL,
     HBPF_DMRD, DMRD_LEN,
-    HBPF_TGID_TS2, HBPF_FRAMETYPE_VOICESYNC,
+    HBPF_TGID_TS2,
+    HBPF_FRAMETYPE_VOICE, HBPF_FRAMETYPE_VOICESYNC, HBPF_FRAMETYPE_DATASYNC,
+    HBPF_SLT_VHEAD, HBPF_SLT_VTERM,
 )
 
 
 class FakeHBPMaster(asyncio.DatagramProtocol):
 
     def __init__(self, args):
-        self._passphrase = args.passphrase.encode()
-        self._transport  = None
-        self._peer_addr  = None
-        self._peer_id    = None
-        self._state      = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → CONNECTED
-        self._salt       = os.urandom(4)
-        self._stdin_task = None
+        self._passphrase  = args.passphrase.encode()
+        self._auto_dmrd   = args.auto_dmrd
+        self._transport   = None
+        self._peer_addr   = None
+        self._peer_id     = None
+        self._state       = 'IDLE'   # IDLE → WAIT_RPTK → WAIT_RPTC → CONNECTED
+        self._salt        = os.urandom(4)
+        self._stdin_task  = None
+        self._auto_task   = None
 
     def connection_made(self, transport):
         self._transport = transport
         host, port = transport.get_extra_info('sockname')
         print(f'[fake-master] Listening on {host}:{port}')
         loop = asyncio.get_event_loop()
-        self._stdin_task = loop.create_task(self._stdin_loop())
+        if self._auto_dmrd:
+            self._auto_task = loop.create_task(self._auto_dmrd_loop())
+        else:
+            self._stdin_task = loop.create_task(self._stdin_loop())
 
     def connection_lost(self, exc):
         print(f'[fake-master] Connection lost: {exc}')
@@ -164,22 +171,57 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
     def _send(self, data: bytes, addr):
         self._transport.sendto(data, addr)
 
+    def _build_dmrd(self, seq: int, flags: int, stream_id: bytes) -> bytes:
+        return (
+            HBPF_DMRD
+            + bytes([seq])
+            + (3120001).to_bytes(3, 'big')   # src
+            + (91).to_bytes(3, 'big')        # dst TGID
+            + (self._peer_id or b'\x00\x00\x00\x00')
+            + bytes([flags])
+            + stream_id
+            + b'\x00' * 33                   # payload
+        )
+
+    def _send_call(self, ts: int = 1, burst_count: int = 6):
+        """Send a full VOICE_HEAD + N VOICE + VOICE_TERM sequence."""
+        if self._state != 'CONNECTED' or not self._peer_addr:
+            print('[fake-master] Not connected — cannot send call')
+            return
+        ts_flag    = HBPF_TGID_TS2 if ts == 2 else 0x00
+        stream_id  = os.urandom(4)
+        seq        = 0
+
+        # VOICE_HEAD
+        flags = ts_flag | HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VHEAD
+        self._send(self._build_dmrd(seq, flags, stream_id), self._peer_addr)
+        print(f'[fake-master] → DMRD VOICE_HEAD  ts={ts}  stream={stream_id.hex()}')
+        seq += 1
+
+        # Voice frames (VOICESYNC + VOICE × (burst_count-1))
+        for i in range(burst_count):
+            if i % 6 == 0:
+                flags = ts_flag | HBPF_FRAMETYPE_VOICESYNC
+            else:
+                flags = ts_flag | HBPF_FRAMETYPE_VOICE | ((i % 6) - 1)
+            self._send(self._build_dmrd(seq, flags, stream_id), self._peer_addr)
+            seq += 1
+
+        print(f'[fake-master] → DMRD {burst_count} voice frames  ts={ts}')
+
+        # VOICE_TERM
+        flags = ts_flag | HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VTERM
+        self._send(self._build_dmrd(seq, flags, stream_id), self._peer_addr)
+        print(f'[fake-master] → DMRD VOICE_TERM  ts={ts}')
+
     def _send_dmrd(self):
+        """Send a single synthetic DMRD frame (interactive command)."""
         if self._state != 'CONNECTED' or not self._peer_addr:
             print('[fake-master] Not connected — cannot send DMRD')
             return
-        # Minimal synthetic DMRD frame (53 bytes)
-        flags = HBPF_TGID_TS2 | HBPF_FRAMETYPE_VOICESYNC
-        frame = (
-            HBPF_DMRD
-            + bytes([1])             # seq
-            + (3120001).to_bytes(3, 'big')  # src
-            + (91).to_bytes(3, 'big')       # dst TGID
-            + (self._peer_id or b'\x00\x00\x00\x00')  # repeater ID
-            + bytes([flags])         # flags byte
-            + os.urandom(4)          # stream ID
-            + b'\x00' * 33          # payload
-        )
+        flags  = HBPF_TGID_TS2 | HBPF_FRAMETYPE_VOICESYNC
+        stream = os.urandom(4)
+        frame  = self._build_dmrd(1, flags, stream)
         self._send(frame, self._peer_addr)
         print(f'[fake-master] → DMRD  {len(frame)} bytes to peer')
 
@@ -200,10 +242,31 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
         self._state = 'IDLE'
 
     # ------------------------------------------------------------------
+    # Auto-DMRD loop (background testing)
+    # ------------------------------------------------------------------
+
+    async def _auto_dmrd_loop(self):
+        """Wait for connection, send TS1+TS2 calls, then keep running."""
+        for _ in range(30):
+            await asyncio.sleep(0.5)
+            if self._state == 'CONNECTED':
+                break
+        if self._state != 'CONNECTED':
+            print('[fake-master] auto-dmrd: timed out waiting for connection')
+            return
+        # Extra delay to allow IPSC peer to register with bridge before forwarding
+        await asyncio.sleep(4)
+        self._send_call(ts=1)
+        await asyncio.sleep(0.5)
+        self._send_call(ts=2)
+
+    # ------------------------------------------------------------------
     # Stdin command loop
     # ------------------------------------------------------------------
 
     async def _stdin_loop(self):
+        if not sys.stdin.isatty():
+            return
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
@@ -213,14 +276,18 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
             print(f'[fake-master] stdin unavailable: {exc}')
             return
 
-        print('[fake-master] Commands: dmrd | nak | close | quit')
+        print('[fake-master] Commands: call [ts1|ts2] | dmrd | nak | close | quit', flush=True)
         while True:
             try:
                 line = await reader.readline()
                 if not line:
                     break
                 cmd = line.decode().strip().lower()
-                if cmd == 'dmrd':
+                if cmd in ('call', 'call ts1'):
+                    self._send_call(ts=1)
+                elif cmd == 'call ts2':
+                    self._send_call(ts=2)
+                elif cmd == 'dmrd':
                     self._send_dmrd()
                 elif cmd == 'nak':
                     self._send_nak()
@@ -230,7 +297,7 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
                     loop.stop()
                     break
                 else:
-                    print('[fake-master] Unknown command. Try: dmrd | nak | close | quit')
+                    print('[fake-master] Unknown command. Try: call [ts1|ts2] | dmrd | nak | close | quit')
             except Exception as exc:
                 print(f'[fake-master] stdin error: {exc}')
                 break
@@ -241,6 +308,8 @@ def main():
     ap.add_argument('--port',       default=62031, type=int, help='UDP port to listen on (default 62031)')
     ap.add_argument('--bind',       default='127.0.0.1', help='Bind address (default 127.0.0.1)')
     ap.add_argument('--passphrase', default='passw0rd', help='HBP passphrase (default passw0rd)')
+    ap.add_argument('--auto-dmrd', action='store_true', dest='auto_dmrd',
+                    help='Send TS1+TS2 calls automatically after connection then exit')
     args = ap.parse_args()
 
     loop = asyncio.new_event_loop()

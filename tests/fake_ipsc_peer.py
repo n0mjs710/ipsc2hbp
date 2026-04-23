@@ -170,6 +170,16 @@ class FakeIPSCPeer(asyncio.DatagramProtocol):
         elif opcode == DE_REG_REPLY:
             print('[fake-peer] DE_REG_REPLY received')
 
+        elif opcode == GROUP_VOICE:
+            if len(data) >= 31:
+                src    = int.from_bytes(data[6:9], 'big')
+                dst    = int.from_bytes(data[9:12], 'big')
+                btype  = data[30]
+                ts     = 2 if (data[17] & TS_CALL_MSK) else 1
+                print(f'[fake-peer] GROUP_VOICE received  burst=0x{btype:02x}  src={src}  tg={dst}  ts={ts}')
+            else:
+                print(f'[fake-peer] GROUP_VOICE received  len={len(data)} (too short)')
+
         else:
             print(f'[fake-peer] Unknown opcode 0x{opcode:02x} received')
 
@@ -261,6 +271,8 @@ class FakeIPSCPeer(asyncio.DatagramProtocol):
                 self._send_alive()
 
     async def _stdin_loop(self):
+        if not sys.stdin.isatty():
+            return
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
