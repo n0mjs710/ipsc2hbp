@@ -355,6 +355,8 @@ class CallTranslator:
             + gv_payload                   # burst_type + payload bytes
         )
         self._in_ipsc_seq = (self._in_ipsc_seq + 1) & 0xFF
+        log.debug('→ IPSC GV  burst=0x%02x  ts=%d  len=%d  hex=%s',
+                  burst_type, ts, len(gv), gv.hex())
         self._ipsc.send_to_peer(gv)
 
         if burst_type == VOICE_HEAD:

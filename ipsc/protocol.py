@@ -105,6 +105,12 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             log.debug('XCMP/XNL received from %s:%d — ignored', host, port)
             return
 
+        # Any packet from the registered peer proves it is still alive; reset
+        # watchdog here because IPSC repeaters do not send keepalives during
+        # active voice transmission.
+        if self._registered and host == self._peer_ip and port == self._peer_port:
+            self._last_ka = time()
+
         if opcode == MASTER_REG_REQ:
             self._on_reg_req(data, host, port)
         elif opcode == MASTER_ALIVE_REQ:
