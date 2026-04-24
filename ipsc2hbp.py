@@ -37,6 +37,8 @@ def main():
                     help='Path to TOML config file (default: ipsc2hbp.toml next to this script)')
     ap.add_argument('--log-level', dest='log_level', default=None,
                     help='Override config log level (DEBUG|INFO|WARNING|ERROR)')
+    ap.add_argument('--wire', action='store_true',
+                    help='Log raw IPSC hex (SEND/RECV) only; silence all other output')
     args = ap.parse_args()
 
     try:
@@ -44,8 +46,18 @@ def main():
     except (FileNotFoundError, ValueError) as exc:
         sys.exit(f'Configuration error: {exc}')
 
-    log_level = args.log_level.upper() if args.log_level else cfg.log_level
-    _setup_logging(log_level)
+    if args.wire:
+        # Wire mode: only the ipsc.wire logger at DEBUG; silence everything else.
+        logging.getLogger().setLevel(logging.WARNING)
+        wire_handler = logging.StreamHandler(sys.stderr)
+        wire_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        wire_log = logging.getLogger('ipsc.wire')
+        wire_log.setLevel(logging.DEBUG)
+        wire_log.addHandler(wire_handler)
+        wire_log.propagate = False
+    else:
+        log_level = args.log_level.upper() if args.log_level else cfg.log_level
+        _setup_logging(log_level)
 
     log = logging.getLogger('ipsc2hbp')
     log.info('ipsc2hbp starting — IPSC master_id=%d  peer_id=%d  HBP %s:%d  mode=%s',

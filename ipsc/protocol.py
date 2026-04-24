@@ -32,6 +32,7 @@ from ipsc.const import (
 )
 
 log = logging.getLogger(__name__)
+_wire = logging.getLogger('ipsc.wire')   # enable with --wire; logs raw hex only
 
 # Our MODE byte: operational (0x40) + digital (0x20) + TS1 on (0x08) + TS2 on (0x02)
 _OUR_MODE = b'\x6A'
@@ -97,6 +98,8 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
         if not data:
             return
+
+        _wire.debug('RECV %d %s', len(data), data.hex())
 
         opcode = data[0]
 
@@ -270,6 +273,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
     def _send(self, packet: bytes, host: str, port: int):
         out = packet + self._auth_suffix(packet)
+        _wire.debug('SEND %d %s', len(packet), packet.hex())
         self._transport.sendto(out, (host, port))
 
     # ------------------------------------------------------------------
