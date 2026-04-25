@@ -557,10 +557,10 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 | HBP MSTNAK received | ERROR |
 | HBP reconnect initiated | INFO |
 | HBP socket error | WARNING |
-| Outbound call start (VOICE_HEAD received) | INFO |
-| Outbound call end (VOICE_TERM received) | INFO |
-| Inbound call start | INFO |
-| Inbound call end | INFO |
+| IPSC call start (VOICE_HEAD from repeater) | INFO |
+| IPSC call end (VOICE_TERM from repeater) | INFO |
+| HBP call start (VOICE_HEAD from network) | INFO |
+| HBP call end (VOICE_TERM from network) | INFO |
 | SLOT_VOICE too short for AMBE | WARNING |
 | Individual voice burst (SLOT_VOICE/DMRD) | DEBUG |
 | XCMP/XNL received | DEBUG |

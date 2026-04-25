@@ -213,7 +213,7 @@ class CallTranslator:
         if burst_type == VOICE_HEAD:
             if self._out_stream_id is None:
                 self._out_stream_id = os.urandom(4)
-                log.info('Outbound call start: src=%d  tg=%d  ts=%d  stream=%s',
+                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s',
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
                          ts, self._out_stream_id.hex())
             else:
@@ -289,7 +289,7 @@ class CallTranslator:
         log.debug('→ HBP DMRD  burst=0x%02x  ts=%d  flags=0x%02x', burst_type, ts, flags)
 
         if burst_type == VOICE_TERM:
-            log.info('Outbound call end:   src=%d  tg=%d  ts=%d',
+            log.info('IPSC call end:   src=%d  tg=%d  ts=%d',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
             self._out_stream_id = None
             self._out_lc        = None
@@ -419,10 +419,10 @@ class CallTranslator:
         self._ipsc.send_to_peer(self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload))
 
         if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
-            log.info('Inbound call start: src=%d  tg=%d  ts=%d',
+            log.info('HBP call start: src=%d  tg=%d  ts=%d',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
         elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
-            log.info('Inbound call end:   src=%d  tg=%d  ts=%d',
+            log.info('HBP call end:   src=%d  tg=%d  ts=%d',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
             self._in_lc     = None
             self._in_emb_lc = None
