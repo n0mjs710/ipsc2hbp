@@ -48,7 +48,8 @@ ipsc2hbp/
 ├── tests/
 │   ├── fake_ipsc_peer.py    # Test tool: simulates a Motorola repeater
 │   ├── fake_hbp_master.py   # Test tool: simulates an HBP master server
-│   └── test_resilience.py   # Automated resilience scenarios
+│   ├── test_resilience.py   # Automated resilience scenarios
+│   └── test_roundtrip.py    # AMBE round-trip verifier (feeds --wire log through translate)
 ├── ipsc2hbp.toml            # Live configuration (gitignored)
 ├── ipsc2hbp.toml.sample     # Annotated sample configuration
 ├── ipsc2hbp.service         # systemd unit template
@@ -58,7 +59,7 @@ ipsc2hbp/
 
 ### 2.3 Startup Sequence
 
-1. Parse CLI arguments (`-c config`, `--log-level override`)
+1. Parse CLI arguments (`-c config`, `--log-level override`, `--wire`)
 2. Load and validate TOML config → `Config` dataclass (fail loudly on any error)
 3. Instantiate `CallTranslator`, `IPSCProtocol`, `HBPClient`; wire them together
 4. Register SIGTERM/SIGINT handlers for graceful shutdown
@@ -201,7 +202,7 @@ Real MOTOTRBO repeaters send GROUP_VOICE packets in one fixed format — the ful
 ```
 Byte  0:       0x80 (GROUP_VOICE opcode)
 Bytes 1–4:     Source peer radio ID (4 bytes, big-endian)
-Byte  5:       IPSC sequence number (wraps at 256)
+Byte  5:       Call stream ID — constant for every packet of one call, changes per call
 Bytes 6–8:     Source subscriber ID (3 bytes, big-endian)
 Bytes 9–11:    Destination group ID / TGID (3 bytes, big-endian)
 Byte  12:      Call type (0x00 = group, 0x03 = private)
@@ -269,12 +270,13 @@ Bytes 36–37:   data size (9 bytes of LC follow)
 Bytes 38–40:   LC options (3 bytes: FLCO, FID, service options)
 Bytes 41–43:   Destination group ID (3 bytes, big-endian)
 Bytes 44–46:   Source subscriber ID (3 bytes, big-endian)
-Bytes 47–53:   RS(12,9) FEC for the LC word (7 bytes)
+Bytes 47–49:   RS(12,9) parity — 3-byte FEC for the LC word
+Bytes 50–53:   Type indicator: 0x00, 0x11 (HEAD) or 0x12 (TERM), 0x00, 0x00
 ```
 
-### 5.3 VOICE_HEAD Payload (bytes 31–56, 26 bytes)
+### 5.3 VOICE_HEAD Payload (bytes 31–53, 23 bytes)
 
-Similar structure to VOICE_TERM with a longer length_to_follow field (12 words → 24 bytes after the fixed prefix) and additional padding.
+Identical structure to VOICE_TERM. The only difference is the type indicator byte: `0x11` for VOICE_HEAD vs `0x12` for VOICE_TERM (bytes 51 of the packet). Total packet length is 54 bytes for both.
 
 ---
 
@@ -458,6 +460,8 @@ The EMBED field is 48 bits: `EMB[8 bits] + embedded_LC_fragment[32 bits] + EMB[8
 
 ### 7.6 Inbound: HBP DMRD VOICE/VOICESYNC → IPSC SLOT_VOICE
 
+AMBE extraction is the same for every burst type:
+
 1. Extract `payload_33 = dmrd[20:53]`
 2. Load 264 bits; extract three 72-bit AMBE frames (AMBE2 is split around the EMBED field):
    ```python
@@ -466,23 +470,35 @@ The EMBED field is 48 bits: `EMB[8 bits] + embedded_LC_fragment[32 bits] + EMB[8
    a2_72 = burst[72:108] + burst[156:192]   # concatenate split halves
    a3_72 = burst[192:264]
    ```
-3. Convert each to 49-bit raw AMBE:
-   ```python
-   a1_49 = convert72BitTo49BitAMBE(a1_72)   # bitarray(49)
-   ```
-4. Pack into the 19-byte IPSC AMBE format:
+3. Convert each to 49-bit raw AMBE and pack into the 19-byte IPSC format:
    ```python
    bits = bitarray(152); bits.setall(0)
    bits[0:49] = a1_49; bits[50:99] = a2_49; bits[100:149] = a3_49
    ambe_19 = bits.tobytes()
    ```
-5. Build 52-byte IPSC GROUP_VOICE packet: 31-byte header + `b'\x00\x00'` + ambe_19
-   - `burst_type` = `SLOT2_VOICE` if TS2, else `SLOT1_VOICE`
-   - `call_info` = `TS_CALL_MSK` if TS2, else `0x00`
+
+The IPSC payload after the burst_type byte differs by HBP frame type / dtype:
+
+| HBP frame | dtype | IPSC packet bytes | Extra payload content |
+|-----------|-------|------------------|-----------------------|
+| VOICESYNC | — | 52 | `b'\x14\x40'` + ambe_19 |
+| VOICE | 0/1/2 (B/C/D) | 57 | `b'\x19\x06'` + ambe_19 + EMB_LC fragment + EMB header byte |
+| VOICE | 3 (E) | 66 | `b'\x22\x16'` + ambe_19 + EMB_LC fragment 4 + LC[0:3] + dst + src + `b'\x14'` |
+| VOICE | 4 (F) | 57 | `b'\x19\x06'` + ambe_19 + null EMB LC (4×0x00) + `b'\x10'` |
+| VOICE | ≥5 | 57 | Null-LC fallback; same wire format as burst F |
+
+`burst_type` = `SLOT2_VOICE` if TS2, else `SLOT1_VOICE`. `call_info` = `TS_CALL_MSK` if TS2, else `0x00`.
 
 ### 7.7 Inbound: HBP VOICE_HEAD/VOICE_TERM → IPSC
 
-Build IPSC GROUP_VOICE packets with `burst_type = VOICE_HEAD` or `VOICE_TERM`. The payload mirrors the structure described in section 5.2/5.3, using the src/dst IDs from the DMRD header to populate the LC fields. `call_info` for VOICE_TERM has `END_MSK` set in addition to the TS bit.
+**VOICE_HEAD**: Decode the LC from the 264-bit BPTC-encoded DMRD payload. The BPTC functions expect a 196-bit codeword, but the full DMR frame inserts 10 slot-type bits and 48 sync bits in the middle, so the second BPTC half is at frame bits [166:264]:
+```python
+bptc_bits = frame_bits[0:98] + frame_bits[166:264]   # 196-bit BPTC
+lc = bptc.decode_full_lc(bptc_bits).tobytes()
+```
+Assign a new call stream ID for byte 5 (per-call constant — see section 4.6). Pre-compute embedded LC fragments for subsequent SLOT_VOICE bursts. Send one 54-byte GROUP_VOICE packet with `burst_type = VOICE_HEAD`, RTP PT=0xdd (M=1, call-start marker).
+
+**VOICE_TERM**: Use stored LC from the call's VOICE_HEAD. Send one 54-byte GROUP_VOICE packet with `burst_type = VOICE_TERM`, `call_info |= END_MSK`, RTP PT=0x5e. Clear inbound call state.
 
 ---
 
@@ -513,7 +529,6 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 | `encode_terminator_lc(lc_9)` | `dmr_utils3.bptc` | `bitarray(196)` | BPTC-encode LC for VOICE_TERM |
 | `encode_emblc(lc_9)` | `dmr_utils3.bptc` | `{1–4: bitarray(32)}` | Embedded LC fragments for bursts B–E |
 | `decode_full_lc(info_bits)` | `dmr_utils3.bptc` | `bitarray(72)` | BPTC-decode LC from 196-bit info field |
-| `voice_head_term(payload_33)` | `dmr_utils3.decode` | `{'LC': bytes, ...}` | Decode LC from DMRD VOICE_HEAD/TERM |
 | `convert49BitTo72BitAMBE(ba49)` | `dmr_utils3.ambe_utils` | `bytearray(9)` | Encode 49-bit raw AMBE to 72-bit interleaved |
 | `convert72BitTo49BitAMBE(ba72)` | `dmr_utils3.ambe_utils` | `bitarray(49)` | Decode 72-bit interleaved to 49-bit raw AMBE |
 
@@ -524,6 +539,8 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 ## 10. Logging
 
 **Destination**: stderr only. systemd captures stderr into journald automatically.
+
+**Wire mode** (`--wire` CLI flag): silences all normal logging and instead emits one line per raw IPSC packet — `SEND N hex` or `RECV N hex`. Use this to capture a live call to a file (`python ipsc2hbp.py --wire 2>wire.txt`) and replay through `tests/test_roundtrip.py` to verify AMBE round-trip integrity.
 
 **Format**: `%(asctime)s %(levelname)s [%(name)s] %(message)s`
 
@@ -562,7 +579,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 | TGID translation or rewriting | Same |
 | Private voice calls | Group voice only |
 | Data calls (GROUP_DATA, PVT_DATA) | Dropped silently |
-| XNL / XCMP processing | ingored |
+| XNL / XCMP processing | ignored |
 | Multiple IPSC peers | One repeater only |
 | Multiple HBP upstream masters | One network server only |
 | Conference, bridging, routing | Not this tool |
