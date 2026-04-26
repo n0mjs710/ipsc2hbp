@@ -26,6 +26,13 @@ ipsc_peer_id = 3120000
 # "LOOSE":  accept any peer radio ID, log warning if it doesn't match
 registration_mode = "STRICT"
 
+# Optional: restrict registration to a specific source IP address.
+# If set, any MASTER_REG_REQ from a different IP is silently dropped (WARNING logged).
+# Leave empty ("") to accept registrations from any IP (subject to registration_mode above).
+# Note: source port is not checked — NAT may change it between registrations.
+# allowed_peer_ip = "192.168.1.100"
+allowed_peer_ip = ""
+
 # IPSC HMAC-SHA1 authentication.
 # Must match the auth key programmed in the repeater codeplug.
 auth_enabled = false

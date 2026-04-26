@@ -146,6 +146,14 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         peer_mode   = data[5:6]   # 1-byte MODE
         peer_flags  = data[6:10]  # 4-byte FLAGS
 
+        # Check allowed_peer_ip if configured — reject anything else before going further
+        if self._cfg.allowed_peer_ip and host != self._cfg.allowed_peer_ip:
+            log.warning(
+                'MASTER_REG_REQ from %s:%d rejected — not the allowed peer IP (%s)',
+                host, port, self._cfg.allowed_peer_ip,
+            )
+            return
+
         # Validate peer radio ID
         if peer_id_int != self._cfg.ipsc_peer_id:
             if self._cfg.registration_mode == 'STRICT':
@@ -159,6 +167,16 @@ class IPSCProtocol(asyncio.DatagramProtocol):
                     'LOOSE: MASTER_REG_REQ radio ID %d does not match configured %d — accepted',
                     peer_id_int, self._cfg.ipsc_peer_id,
                 )
+
+        # Block hijacking: while a peer is registered in good standing, reject registrations
+        # from a different source IP.  Same IP + different port is allowed — handles NAT
+        # rebinding without dropping a legitimate repeater's re-registration.
+        if self._registered and host != self._peer_ip:
+            log.warning(
+                'MASTER_REG_REQ from %s:%d rejected — %s already registered in good standing',
+                host, port, self._peer_ip,
+            )
+            return
 
         was_registered = self._registered
         self._registered = True

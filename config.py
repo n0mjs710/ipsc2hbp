@@ -1,5 +1,6 @@
 import binascii
 import logging
+import socket
 import tomllib
 from dataclasses import dataclass
 
@@ -22,6 +23,7 @@ class Config:
     ipsc_master_id: int
     ipsc_peer_id: int
     registration_mode: str
+    allowed_peer_ip: str   # if non-empty, only this source IP may register
     auth_enabled: bool
     auth_key: bytes        # 20 bytes, zero-padded from hex config value
     keepalive_watchdog: int
@@ -115,6 +117,12 @@ def load(path: str) -> Config:
     ipsc_master_id      = get_int('ipsc', 'ipsc_master_id', min_val=1)
     ipsc_peer_id        = get_int('ipsc', 'ipsc_peer_id', min_val=1)
     registration_mode   = get_str('ipsc', 'registration_mode', choices=_VALID_REG_MODES)
+    allowed_peer_ip     = get_str('ipsc', 'allowed_peer_ip', required=False, default='')
+    if allowed_peer_ip:
+        try:
+            socket.inet_aton(allowed_peer_ip)
+        except OSError:
+            errors.append(f'[ipsc] allowed_peer_ip: not a valid IPv4 address: {allowed_peer_ip!r}')
     auth_enabled        = get_bool('ipsc', 'auth_enabled')
     keepalive_watchdog  = get_int('ipsc', 'keepalive_watchdog', min_val=5)
 
@@ -175,6 +183,7 @@ def load(path: str) -> Config:
         ipsc_master_id=ipsc_master_id,
         ipsc_peer_id=ipsc_peer_id,
         registration_mode=registration_mode,
+        allowed_peer_ip=allowed_peer_ip,
         auth_enabled=auth_enabled,
         auth_key=auth_key,
         keepalive_watchdog=keepalive_watchdog,
