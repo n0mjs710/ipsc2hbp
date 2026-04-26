@@ -82,8 +82,8 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 - `bind_ip` — local IP to bind the IPSC UDP socket (`0.0.0.0` for all interfaces)
 - `bind_port` — UDP port the repeater connects to (must match the codeplug)
 - `ipsc_master_id` — radio ID this translator presents as the IPSC master node
-- `ipsc_peer_id` — expected radio ID of the Motorola repeater
-- `registration_mode` — `STRICT` (reject mismatched IDs) or `LOOSE` (warn and accept)
+- `ipsc_peer_id` — radio ID of the Motorola repeater; if set, only that ID is accepted; if 0 or omitted, any peer ID is accepted (wildcard mode)
+- `allowed_peer_ip` — optional; if set, only registrations from this source IP are accepted regardless of peer state or radio ID
 - `auth_enabled` — boolean; enables HMAC-SHA1 packet authentication
 - `auth_key` — hex string, up to 40 hex chars (20 bytes); shorter keys are left-zero-padded
 - `keepalive_watchdog` — seconds without keepalive before declaring peer lost (minimum 5)
@@ -91,8 +91,7 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 **`[hbp]`**
 - `master_ip`, `master_port` — upstream HBP server address
 - `passphrase` — plaintext passphrase for the HBP master (encoded to bytes internally)
-- `hbp_repeater_id` — radio ID sent in all HBP packets; defaults to `ipsc_peer_id` when 0 or omitted
-- `id_match` — `MATCH` (refuse to start if hbp_repeater_id ≠ ipsc_peer_id) or `ALLOW`
+- `hbp_repeater_id` — radio ID sent in all HBP packets; defaults to `ipsc_peer_id` when 0 or omitted; at least one of `ipsc_peer_id` or `hbp_repeater_id` must be non-zero
 - `hbp_mode` — `TRACKING` or `PERSISTENT` (see section 6.3)
 - `options` — RPTO options string, e.g. `"TS1=91,310;TS2=*"`; empty = skip RPTO step
 - RPTC announcement fields: `callsign`, `rx_freq`, `tx_freq`, `tx_power`, `colorcode`, `latitude`, `longitude`, `height`, `location`, `description`, `url`, `software_id`, `package_id`
@@ -163,8 +162,8 @@ Bytes 6–9:   Flags (4 bytes, capability / link-type flags)
 ```
 
 Radio ID validation:
-- **STRICT mode**: if `peer_id_int != ipsc_peer_id` → log WARNING, drop
-- **LOOSE mode**: if `peer_id_int != ipsc_peer_id` → log WARNING, accept
+- If `ipsc_peer_id` is non-zero and `peer_id_int != ipsc_peer_id` → log WARNING, drop
+- If `ipsc_peer_id` is 0 (wildcard) → any peer radio ID is accepted
 
 **MASTER_REG_REPLY sent** (16 bytes before auth):
 ```

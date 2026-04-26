@@ -7,8 +7,6 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS = {'DEBUG', 'INFO', 'WARNING', 'ERROR'}
-_VALID_REG_MODES  = {'STRICT', 'LOOSE'}
-_VALID_ID_MATCH   = {'MATCH', 'ALLOW'}
 _VALID_HBP_MODES  = {'TRACKING', 'PERSISTENT'}
 
 
@@ -21,8 +19,7 @@ class Config:
     ipsc_bind_ip: str
     ipsc_bind_port: int
     ipsc_master_id: int
-    ipsc_peer_id: int
-    registration_mode: str
+    ipsc_peer_id: int      # 0 = accept any peer radio ID (wildcard)
     allowed_peer_ip: str   # if non-empty, only this source IP may register
     auth_enabled: bool
     auth_key: bytes        # 20 bytes, zero-padded from hex config value
@@ -31,8 +28,7 @@ class Config:
     # [hbp]
     hbp_master_ip: str
     hbp_master_port: int
-    hbp_repeater_id: int   # resolved: defaults to ipsc_peer_id when 0
-    id_match: str
+    hbp_repeater_id: int   # resolved: defaults to ipsc_peer_id when 0; always non-zero
     hbp_passphrase: bytes
     hbp_mode: str
 
@@ -115,8 +111,7 @@ def load(path: str) -> Config:
     ipsc_bind_ip        = get_str('ipsc', 'bind_ip')
     ipsc_bind_port      = get_int('ipsc', 'bind_port', min_val=1, max_val=65535)
     ipsc_master_id      = get_int('ipsc', 'ipsc_master_id', min_val=1)
-    ipsc_peer_id        = get_int('ipsc', 'ipsc_peer_id', min_val=1)
-    registration_mode   = get_str('ipsc', 'registration_mode', choices=_VALID_REG_MODES)
+    ipsc_peer_id        = get_int('ipsc', 'ipsc_peer_id', required=False, default=0)
     allowed_peer_ip     = get_str('ipsc', 'allowed_peer_ip', required=False, default='')
     if allowed_peer_ip:
         try:
@@ -141,7 +136,6 @@ def load(path: str) -> Config:
     # [hbp]
     hbp_master_ip   = get_str('hbp', 'master_ip')
     hbp_master_port = get_int('hbp', 'master_port', min_val=1, max_val=65535)
-    id_match        = get_str('hbp', 'id_match', choices=_VALID_ID_MATCH)
     hbp_mode        = get_str('hbp', 'hbp_mode', choices=_VALID_HBP_MODES)
     hbp_repeater_id = get_int('hbp', 'hbp_repeater_id', required=False, default=0)
 
@@ -167,13 +161,13 @@ def load(path: str) -> Config:
     if errors:
         raise ValueError('Configuration errors:\n' + '\n'.join(f'  {e}' for e in errors))
 
-    # Resolve hbp_repeater_id
+    # Resolve hbp_repeater_id — falls back to ipsc_peer_id when not explicitly set
     resolved_repeater_id = hbp_repeater_id if hbp_repeater_id else ipsc_peer_id
 
-    if id_match == 'MATCH' and hbp_repeater_id and hbp_repeater_id != ipsc_peer_id:
-        raise ValueError(
-            f'[hbp] hbp_repeater_id ({hbp_repeater_id}) != ipsc_peer_id ({ipsc_peer_id}) '
-            f'but id_match = "MATCH". Set id_match = "ALLOW" or use matching IDs.'
+    if not resolved_repeater_id:
+        errors.append(
+            'At least one of [ipsc] ipsc_peer_id or [hbp] hbp_repeater_id must be set — '
+            'HBP requires a radio ID to connect with'
         )
 
     return Config(
@@ -182,7 +176,6 @@ def load(path: str) -> Config:
         ipsc_bind_port=ipsc_bind_port,
         ipsc_master_id=ipsc_master_id,
         ipsc_peer_id=ipsc_peer_id,
-        registration_mode=registration_mode,
         allowed_peer_ip=allowed_peer_ip,
         auth_enabled=auth_enabled,
         auth_key=auth_key,
@@ -190,7 +183,6 @@ def load(path: str) -> Config:
         hbp_master_ip=hbp_master_ip,
         hbp_master_port=hbp_master_port,
         hbp_repeater_id=resolved_repeater_id,
-        id_match=id_match,
         hbp_passphrase=hbp_passphrase,
         hbp_mode=hbp_mode,
         options=options,

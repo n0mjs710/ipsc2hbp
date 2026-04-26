@@ -154,19 +154,13 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             )
             return
 
-        # Validate peer radio ID
-        if peer_id_int != self._cfg.ipsc_peer_id:
-            if self._cfg.registration_mode == 'STRICT':
-                log.warning(
-                    'STRICT: MASTER_REG_REQ radio ID %d does not match configured %d — dropped',
-                    peer_id_int, self._cfg.ipsc_peer_id,
-                )
-                return
-            else:
-                log.warning(
-                    'LOOSE: MASTER_REG_REQ radio ID %d does not match configured %d — accepted',
-                    peer_id_int, self._cfg.ipsc_peer_id,
-                )
+        # Validate peer radio ID — if ipsc_peer_id is 0 (wildcard), accept any
+        if self._cfg.ipsc_peer_id and peer_id_int != self._cfg.ipsc_peer_id:
+            log.warning(
+                'MASTER_REG_REQ radio ID %d does not match configured %d — dropped',
+                peer_id_int, self._cfg.ipsc_peer_id,
+            )
+            return
 
         # Block hijacking: while a peer is registered in good standing, reject registrations
         # from a different source IP.  Same IP + different port is allowed — handles NAT
