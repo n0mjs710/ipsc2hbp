@@ -26,7 +26,7 @@ ipsc_peer_id = 3120000
 
 # Optional: restrict registration to a specific source IP address.
 # If set, any MASTER_REG_REQ from a different IP is silently dropped (WARNING logged).
-# Leave empty ("") to accept registrations from any IP (subject to registration_mode above).
+# Leave empty ("") to accept registrations from any IP.
 # Note: source port is not checked — NAT may change it between registrations.
 # allowed_peer_ip = "192.168.1.100"
 allowed_peer_ip = ""
@@ -63,6 +63,9 @@ passphrase = "passw0rd"
 #               Disconnect when the repeater goes away. Recommended.
 # "PERSISTENT": Keep the HBP connection up regardless of repeater state.
 #               Useful to keep the system visible on network dashboards.
+#               Requires ipsc_peer_id or hbp_repeater_id to be non-zero —
+#               the HBP connection is established at startup, before any
+#               repeater registers, so a radio ID must be pre-configured.
 hbp_mode = "TRACKING"
 
 # ---------------------------------------------------------------------------

@@ -549,7 +549,9 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 | Shutdown (SIGTERM / SIGINT) | INFO |
 | IPSC peer registered / re-registered | INFO |
 | IPSC peer lost (watchdog or DE_REG) | WARNING |
-| IPSC peer rejected — STRICT mode | WARNING |
+| IPSC peer rejected — radio ID mismatch | WARNING |
+| IPSC peer rejected — source IP not allowed | WARNING |
+| IPSC peer rejected — hijack attempt (different IP) | WARNING |
 | IPSC auth failure | WARNING |
 | HBP connected | INFO |
 | HBP disconnected (watchdog or close) | WARNING |

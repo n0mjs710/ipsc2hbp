@@ -9,7 +9,6 @@ bind_ip            = "127.0.0.1"
 bind_port          = 50000
 ipsc_master_id     = 9999999
 ipsc_peer_id       = 3120000
-registration_mode  = "STRICT"
 auth_enabled       = false
 auth_key           = ""
 keepalive_watchdog = 15
@@ -17,7 +16,6 @@ keepalive_watchdog = 15
 [hbp]
 master_ip   = "127.0.0.1"
 master_port = 62031
-id_match    = "MATCH"
 passphrase  = "passw0rd"
 hbp_mode    = "PERSISTENT"
 
