@@ -1,5 +1,7 @@
 ## PROJECT: IPSC to HomeBrew Protocol Translator ##
 
+**NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it invovles painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please to not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
+
 **PURPOSE:** A single, small Python 3 daemon that connects one Motorola MOTOTRBO repeater — via the proprietary IPSC protocol — to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
 
 **WHY THIS EXISTS:**
