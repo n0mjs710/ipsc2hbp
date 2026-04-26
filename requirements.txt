@@ -1,2 +1,2 @@
-dmr-utils3>=0.1.29
+dmr-utils3>=0.1.30
 bitarray>=2.5.0
