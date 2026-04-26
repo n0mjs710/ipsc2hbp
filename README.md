@@ -27,7 +27,13 @@ This is not a general-purpose bridge, reflector, or network controller. It does 
 - One Motorola MOTOTRBO repeater configured with this host as its IPSC master
 - One upstream HBP server (BrandMeister, DMR+, HBlink4, etc.)
 
+**PREREQUISITES**
+
+Successful use of ipsc2hbp reuires a working knowlege of the unix command line interace (CLI) and Python, including python virtual environemens (venv). Users without thse skills may find it challenging to be successful.
+
 **GETTING STARTED:**
+
+The following will run ipsc2hbp in the glocal python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
 
 ```
 pip install -r requirements.txt
