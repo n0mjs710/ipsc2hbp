@@ -76,8 +76,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         self._transport = transport
         log.info('IPSC master listening on %s:%d',
                  self._cfg.ipsc_bind_ip, self._cfg.ipsc_bind_port)
-        loop = asyncio.get_event_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop())
+        self._watchdog_task = asyncio.get_running_loop().create_task(self._watchdog_loop())
 
     def connection_lost(self, exc):
         if self._watchdog_task:
@@ -143,7 +142,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         peer_id     = data[1:5]
         peer_id_int = int.from_bytes(peer_id, 'big')
         peer_mode   = data[5:6]   # 1-byte MODE
-        peer_flags  = data[6:10]  # 4-byte FLAGS
+        peer_flags  = data[6:10]  # 4-byte FLAGS — reserved for future capability negotiation
 
         # Check allowed_peer_ip if configured — reject anything else before going further
         if self._cfg.allowed_peer_ip and host != self._cfg.allowed_peer_ip:
