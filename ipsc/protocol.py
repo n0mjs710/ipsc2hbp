@@ -299,6 +299,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
                         elapsed, self._cfg.keepalive_watchdog,
                     )
                     self._clear_peer()
+            self._translator.check_call_timeouts()
 
     def _clear_peer(self):
         if self._registered:

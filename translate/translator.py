@@ -37,6 +37,7 @@ Superframe mapping (6-frame cycle, position resets on each VOICE_HEAD):
 import logging
 import os
 import struct
+from time import time
 
 from bitarray import bitarray
 
@@ -168,6 +169,10 @@ class CallTranslator:
         self._in_rtp_seq    = {1: 0, 2: 0}        # RTP sequence in GV header
         self._in_rtp_ts     = {1: 0, 2: 0}        # RTP timestamp; increments 480/frame
 
+        # Last-packet timestamps for hung-call detection (seconds since epoch)
+        self._out_last_pkt  = {1: 0.0, 2: 0.0}
+        self._in_last_pkt   = {1: 0.0, 2: 0.0}
+
         # Call metadata learned from the IPSC peer and echoed back inbound
         self._peer_call_type = b'\x02'               # group voice (Motorola default)
         self._peer_call_ctrl = b'\x00\x00\x43\xe2'  # Motorola repeater default
@@ -191,9 +196,11 @@ class CallTranslator:
         self._out_stream_id  = {1: None, 2: None}
         self._out_lc         = {1: None, 2: None}
         self._out_emb_lc     = {1: None, 2: None}
+        self._out_last_pkt   = {1: 0.0, 2: 0.0}
         self._in_lc          = {1: None, 2: None}
         self._in_emb_lc      = {1: None, 2: None}
         self._in_stream_id   = {1: 0, 2: 0}
+        self._in_last_pkt    = {1: 0.0, 2: 0.0}
         self._peer_call_type = b'\x02'
         self._peer_call_ctrl = b'\x00\x00\x43\xe2'
         if self._cfg.hbp_mode == 'TRACKING':
@@ -202,6 +209,7 @@ class CallTranslator:
     def ipsc_voice_received(self, data: bytes, ts: int, burst_type: int):
         if not self._hbp.is_connected():
             return
+        self._out_last_pkt[ts] = time()
 
         src_sub   = data[GV_SRC_SUB_OFF   : GV_SRC_SUB_OFF   + 3]
         dst_group = data[GV_DST_GROUP_OFF  : GV_DST_GROUP_OFF + 3]
@@ -318,9 +326,11 @@ class CallTranslator:
         self._out_stream_id = {1: None, 2: None}
         self._out_lc        = {1: None, 2: None}
         self._out_emb_lc    = {1: None, 2: None}
+        self._out_last_pkt  = {1: 0.0, 2: 0.0}
         self._in_lc         = {1: None, 2: None}
         self._in_emb_lc     = {1: None, 2: None}
         self._in_stream_id  = {1: 0, 2: 0}
+        self._in_last_pkt   = {1: 0.0, 2: 0.0}
 
     def hbp_voice_received(self, dmrd: bytes):
         """Inbound HBP → IPSC."""
@@ -335,6 +345,7 @@ class CallTranslator:
         payload_33 = dmrd[DMRD_PAYLOAD_OFF : DMRD_PAYLOAD_OFF + 33]
 
         ts         = 2 if (flags & HBPF_TGID_TS2) else 1
+        self._in_last_pkt[ts] = time()
         frame_type = flags & HBPF_FRAMETYPE_MASK
         dtype      = flags & HBPF_DTYPE_MASK
         call_info  = TS_CALL_MSK if ts == 2 else 0x00
@@ -448,6 +459,40 @@ class CallTranslator:
             + rtp_hdr
             + gv_payload
         )
+
+    # ------------------------------------------------------------------
+    # Watchdog support
+    # ------------------------------------------------------------------
+
+    def check_call_timeouts(self, timeout: float = 10.0):
+        """
+        Called by the IPSC watchdog every 5 s.  If a call stream has been active
+        but silent for longer than `timeout` seconds (default 10 s — 2 watchdog
+        ticks), log a warning and clear that timeslot's state so it can accept
+        a new call.  This handles the case where VOICE_TERM is never received
+        (RF dropout, firmware bug, lost packet).
+        """
+        now = time()
+        for ts in (1, 2):
+            if self._out_stream_id[ts] is not None:
+                elapsed = now - self._out_last_pkt[ts]
+                if elapsed > timeout:
+                    log.warning(
+                        'IPSC→HBP call timeout: ts=%d stream=%s — no voice for %.1fs, clearing',
+                        ts, self._out_stream_id[ts].hex(), elapsed,
+                    )
+                    self._out_stream_id[ts] = None
+                    self._out_lc[ts]        = None
+                    self._out_emb_lc[ts]    = None
+            if self._in_lc[ts] is not None:
+                elapsed = now - self._in_last_pkt[ts]
+                if elapsed > timeout:
+                    log.warning(
+                        'HBP→IPSC call timeout: ts=%d — no voice for %.1fs, clearing',
+                        ts, elapsed,
+                    )
+                    self._in_lc[ts]     = None
+                    self._in_emb_lc[ts] = None
 
     # ------------------------------------------------------------------
     # Status queries
