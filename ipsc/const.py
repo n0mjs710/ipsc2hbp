@@ -59,7 +59,7 @@ END_MSK     = 0b01000000   # bit 6: 1=call end (VOICE_TERM already sent)
 # dumpIPSCFrame() and dmrlink.py datagramReceived().
 # ---------------------------------------------------------------------------
 GV_PEER_ID_OFF    = 1    # bytes 1–4:   source peer radio ID (4 bytes)
-GV_IPSC_SEQ_OFF   = 5    # byte  5:     call stream ID — constant for all packets of one call
+GV_IPSC_SEQ_OFF   = 5    # byte  5:     call stream ID — constant within a call, increments by 1 each new call, wraps at 255
 GV_SRC_SUB_OFF    = 6    # bytes 6–8:   source subscriber ID (3 bytes)
 GV_DST_GROUP_OFF  = 9    # bytes 9–11:  destination group ID / TGID (3 bytes)
 GV_CALL_INFO_OFF  = 17   # byte  17:    call info — TS_CALL_MSK and END_MSK
