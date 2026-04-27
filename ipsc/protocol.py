@@ -8,7 +8,6 @@ Packet layout confirmed from DMRlink IPSC_Bridge.py / dmrlink.py source.
 """
 
 import asyncio
-import binascii
 import hmac as hmac_mod
 import logging
 import socket
@@ -271,17 +270,13 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             return False
         payload  = data[:-AUTH_DIGEST_LEN]
         received = data[-AUTH_DIGEST_LEN:]
-        expected = binascii.unhexlify(
-            hmac_mod.new(self._cfg.auth_key, payload, sha1).hexdigest()[:20]
-        )
+        expected = hmac_mod.new(self._cfg.auth_key, payload, sha1).digest()[:10]
         return received == expected
 
     def _auth_suffix(self, packet: bytes) -> bytes:
         if not self._cfg.auth_enabled:
             return b''
-        return binascii.unhexlify(
-            hmac_mod.new(self._cfg.auth_key, packet, sha1).hexdigest()[:20]
-        )
+        return hmac_mod.new(self._cfg.auth_key, packet, sha1).digest()[:10]
 
     def _send(self, packet: bytes, host: str, port: int):
         out = packet + self._auth_suffix(packet)

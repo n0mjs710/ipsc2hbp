@@ -1,4 +1,3 @@
-import binascii
 import logging
 import socket
 import tomllib
@@ -129,8 +128,8 @@ def load(path: str) -> Config:
             errors.append(f'[ipsc] auth_key: must be at most 40 hex characters')
         else:
             try:
-                auth_key = binascii.unhexlify(raw_key.zfill(40))
-            except binascii.Error as exc:
+                auth_key = bytes.fromhex(raw_key.zfill(40))
+            except ValueError as exc:
                 errors.append(f'[ipsc] auth_key: not valid hex: {exc}')
 
     # [hbp]
