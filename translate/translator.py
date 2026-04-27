@@ -13,15 +13,17 @@ Inbound (HBP → IPSC): hbp_voice_received()
                     pack into 19-byte IPSC AMBE format, send burst-type-specific payload.
 
 AMBE layout in IPSC SLOT_VOICE (bytes 33–51, 19 bytes = 152 bits):
-  bits[0:49]   = AMBE frame 1 (49 bits)
-  bits[49]     = separator (0)
-  bits[50:99]  = AMBE frame 2 (49 bits)
-  bits[99]     = separator (0)
-  bits[100:149] = AMBE frame 3 (49 bits)
-  bits[149:152] = padding (0)
+  bits[0:49]    = AMBE frame a (49 bits)
+  bit[49]       = bad data bit for frame a (1 = AMBE decode error; always 0 on transmit)
+  bits[50:99]   = AMBE frame b (49 bits)
+  bit[99]       = bad data bit for frame b (always 0 on transmit)
+  bits[100:149] = AMBE frame c (49 bits)
+  bit[149]      = bad data bit for frame c (always 0 on transmit)
+  bits[150:152] = pad (0)
 
 DMR voice frame layout (264 bits = 33 bytes):
-  AMBE1[72] | AMBE2_first[36] | EMBED[48] | AMBE2_second[36] | AMBE3[72]
+  frame_a[72] | frame_b_first[36] | EMBED[48] | frame_b_second[36] | frame_c[72]
+  (frame b straddles the EMBED/SYNC field; reassembled by concatenating the two halves)
 
 Superframe mapping (6-frame cycle, position resets on each VOICE_HEAD):
   position 0   → HBPF_FRAMETYPE_VOICESYNC, EMBED = BS_VOICE_SYNC
