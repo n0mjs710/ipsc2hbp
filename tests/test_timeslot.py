@@ -363,55 +363,26 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         tr.hbp_voice_received(_dmrd_term(ts=2))
         self.assertEqual(len(ipsc.sent), 6)
 
-    def test_rtp_seq_advances_per_ts(self):
-        """seq increments per-packet per-TS; starting value is random per call."""
+    def test_rtp_seq_tracked_per_ts(self):
         tr, _, _ = _make_tr()
         tr.hbp_voice_received(_dmrd_head(ts=1))
-        seq1_after_head = tr._in_rtp_seq[1]   # random start + 1
         tr.hbp_voice_received(_dmrd_head(ts=2))
-        seq2_after_head = tr._in_rtp_seq[2]
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        # TS1: advanced by 2 more voice packets
-        self.assertEqual(tr._in_rtp_seq[1], seq1_after_head + 2)
-        # TS2: unchanged (only HEAD was sent)
-        self.assertEqual(tr._in_rtp_seq[2], seq2_after_head)
+        # After 2 voice bursts on TS1, TS1 seq should be 3 (HEAD + 2 voices)
+        # TS2 seq should be 1 (HEAD only)
+        self.assertEqual(tr._in_rtp_seq[1], 3)
+        self.assertEqual(tr._in_rtp_seq[2], 1)
 
-    def test_rtp_ts_advances_per_ts(self):
-        """timestamp increments 480 per packet per-TS; starting value is random per call."""
+    def test_rtp_ts_tracked_per_ts(self):
         tr, _, _ = _make_tr()
         tr.hbp_voice_received(_dmrd_head(ts=1))
-        ts1_after_head = tr._in_rtp_ts[1]
         tr.hbp_voice_received(_dmrd_head(ts=2))
-        ts2_after_head = tr._in_rtp_ts[2]
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        # TS1: one more voice packet = +480
-        self.assertEqual(tr._in_rtp_ts[1], ts1_after_head + 480)
-        # TS2: unchanged
-        self.assertEqual(tr._in_rtp_ts[2], ts2_after_head)
-
-    def test_rtp_ssrc_unique_per_call(self):
-        """Each call gets a distinct SSRC; two simultaneous calls never share one."""
-        tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        ssrc1 = tr._in_ssrc[1]
-        tr.hbp_voice_received(_dmrd_head(ts=2))
-        ssrc2 = tr._in_ssrc[2]
-        self.assertEqual(len(ssrc1), 4)
-        self.assertEqual(len(ssrc2), 4)
-        self.assertNotEqual(ssrc1, bytes(4), 'SSRC must not be all-zeros')
-        self.assertNotEqual(ssrc2, bytes(4))
-        self.assertNotEqual(ssrc1, ssrc2, 'TS1 and TS2 must have distinct SSRCs')
-
-    def test_rtp_ssrc_changes_between_calls(self):
-        """A new call on the same TS gets a new SSRC."""
-        tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        ssrc_call1 = tr._in_ssrc[1]
-        tr.hbp_voice_received(_dmrd_term(ts=1))
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        ssrc_call2 = tr._in_ssrc[1]
-        self.assertNotEqual(ssrc_call1, ssrc_call2, 'New call must generate a new SSRC')
+        # TS1: 2 packets at 480/packet = 960 total
+        self.assertEqual(tr._in_rtp_ts[1], 960)
+        # TS2: 1 packet = 480 total
+        self.assertEqual(tr._in_rtp_ts[2], 480)
 
 
 # ===========================================================================

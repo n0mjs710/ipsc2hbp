@@ -156,7 +156,7 @@ class CallTranslator:
 
         # Outbound call state (IPSC → HBP) — keyed by timeslot (1 or 2)
         self._out_stream_id = {1: None, 2: None}  # 4 random bytes, new per call
-        self._out_seq       = {1: 0, 2: 0}        # DMRD sequence byte per TS, wraps at 256
+        self._out_seq       = 0                   # DMRD sequence byte, wraps at 256 (shared)
         self._out_frame_pos = {1: 0, 2: 0}        # superframe position (0–5, cycles)
         self._out_lc        = {1: None, 2: None}  # 9-byte LC for embedded LC generation
         self._out_emb_lc    = {1: None, 2: None}  # dict {1–4: bitarray(32)} embedded LC
@@ -166,9 +166,8 @@ class CallTranslator:
         self._in_emb_lc     = {1: None, 2: None}  # dict {1–4: bitarray(32)} from bptc.encode_emblc
         self._in_stream_id  = {1: 0, 2: 0}        # byte 5: call stream ID, constant per call
         self._in_stream_ctr = 0                   # increments once per call (shared across TS)
-        self._in_rtp_seq    = {1: 0, 2: 0}        # RTP sequence in GV header; randomised per call
-        self._in_rtp_ts     = {1: 0, 2: 0}        # RTP timestamp; randomised per call, +480/frame
-        self._in_ssrc       = {1: bytes(4), 2: bytes(4)}  # RTP SSRC; unique random 4 bytes per call
+        self._in_rtp_seq    = {1: 0, 2: 0}        # RTP sequence in GV header
+        self._in_rtp_ts     = {1: 0, 2: 0}        # RTP timestamp; increments 480/frame
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
         self._out_last_pkt  = {1: 0.0, 2: 0.0}
@@ -195,16 +194,12 @@ class CallTranslator:
     def peer_lost(self):
         log.warning('IPSC peer lost')
         self._out_stream_id  = {1: None, 2: None}
-        self._out_seq        = {1: 0, 2: 0}
         self._out_lc         = {1: None, 2: None}
         self._out_emb_lc     = {1: None, 2: None}
         self._out_last_pkt   = {1: 0.0, 2: 0.0}
         self._in_lc          = {1: None, 2: None}
         self._in_emb_lc      = {1: None, 2: None}
         self._in_stream_id   = {1: 0, 2: 0}
-        self._in_rtp_seq     = {1: 0, 2: 0}
-        self._in_rtp_ts      = {1: 0, 2: 0}
-        self._in_ssrc        = {1: bytes(4), 2: bytes(4)}
         self._in_last_pkt    = {1: 0.0, 2: 0.0}
         self._peer_call_type = b'\x02'
         self._peer_call_ctrl = b'\x00\x00\x43\xe2'
@@ -291,7 +286,7 @@ class CallTranslator:
 
         dmrd = (
             HBPF_DMRD
-            + bytes([self._out_seq[ts]])
+            + bytes([self._out_seq])
             + src_sub
             + dst_group
             + self._repeater_id_b
@@ -300,7 +295,7 @@ class CallTranslator:
             + payload_33
             + b'\x00\x00'   # BER + RSSI (synthesised, no RF measurement)
         )
-        self._out_seq[ts] = (self._out_seq[ts] + 1) & 0xFF
+        self._out_seq = (self._out_seq + 1) & 0xFF
         self._hbp.send_dmrd(dmrd)
         log.debug('→ HBP DMRD  burst=0x%02x  ts=%d  flags=0x%02x', burst_type, ts, flags)
 
@@ -329,16 +324,12 @@ class CallTranslator:
     def hbp_disconnected(self):
         log.warning('HBP disconnected')
         self._out_stream_id = {1: None, 2: None}
-        self._out_seq       = {1: 0, 2: 0}
         self._out_lc        = {1: None, 2: None}
         self._out_emb_lc    = {1: None, 2: None}
         self._out_last_pkt  = {1: 0.0, 2: 0.0}
         self._in_lc         = {1: None, 2: None}
         self._in_emb_lc     = {1: None, 2: None}
         self._in_stream_id  = {1: 0, 2: 0}
-        self._in_rtp_seq    = {1: 0, 2: 0}
-        self._in_rtp_ts     = {1: 0, 2: 0}
-        self._in_ssrc       = {1: bytes(4), 2: bytes(4)}
         self._in_last_pkt   = {1: 0.0, 2: 0.0}
 
     def hbp_voice_received(self, dmrd: bytes):
@@ -377,11 +368,6 @@ class CallTranslator:
             # Real Motorola equipment uses the same value for every packet of a call.
             self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
             self._in_stream_id[ts] = self._in_stream_ctr
-            # Randomise RTP identifiers per call so two simultaneous TS streams
-            # never share the same SSRC, sequence space, or timestamp space.
-            self._in_ssrc[ts]      = os.urandom(4)
-            self._in_rtp_seq[ts]   = int.from_bytes(os.urandom(2), 'big')
-            self._in_rtp_ts[ts]    = int.from_bytes(os.urandom(4), 'big')
             gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(lc, VOICE_HEAD)
             rtp_pt = 0xdd  # M=1 (call-start marker)
 
@@ -443,7 +429,7 @@ class CallTranslator:
         rtp_ts_b  = struct.pack('>I', self._in_rtp_ts[ts]  & 0xFFFFFFFF)
         self._in_rtp_seq[ts] += 1
         self._in_rtp_ts[ts]  += 480
-        rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + self._in_ssrc[ts]
+        rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
         self._ipsc.send_to_peer(
             self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
         )
