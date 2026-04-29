@@ -384,8 +384,8 @@ class CallTranslator:
                 # Burst A: 52 bytes total.  byte31=0x14 (len=20), byte32=0x40 (???)
                 gv_payload = bytes([slot_burst]) + b'\x14\x40' + ambe_19
 
-            elif dtype == 3:
-                # Burst E: 66 bytes total.  byte31=0x22 (len=34), byte32=0x16 (???)
+            elif dtype == 4:
+                # Burst E (HBLink4 dtype=4): 66 bytes total.  byte31=0x22 (len=34), byte32=0x16
                 # bytes 52-55: embedded LC fragment 4 from encode_emblc
                 # bytes 56-58: LC[0:3]  (FLCO, FID, SVC_OPT)
                 # bytes 59-61: dst_group
@@ -398,30 +398,23 @@ class CallTranslator:
                 gv_payload = (bytes([slot_burst]) + b'\x22\x16' + ambe_19
                               + emb_frag + lc_prefix + dst_group + src_sub + b'\x14')
 
-            elif dtype == 4:
-                # Burst F: 57 bytes total.  byte31=0x19 (len=25), byte32=0x06 (???)
-                # bytes 52-55: null embedded LC (four zero bytes)
+            elif dtype >= 5:
+                # Burst F (HBLink4 dtype=5): null embedded LC, 57 bytes.
                 # byte  56:    0x10  (EMB header for BURST_F = 0x11, & 0xFE = 0x10)
                 gv_payload = bytes([slot_burst]) + b'\x19\x06' + ambe_19 + b'\x00\x00\x00\x00\x10'
 
-            elif dtype <= 2:
-                # Bursts B/C/D (dtype 0/1/2): 57 bytes total.  byte31=0x19 (len=25), byte32=0x06 (???)
-                # bytes 52-55: embedded LC fragment at encode_emblc position dtype+1
+            else:
+                # Bursts B/C/D (HBLink4 dtype=1/2/3; dtype=0 handled as B for compatibility).
+                # 57 bytes total.  byte31=0x19 (len=25), byte32=0x06
+                # bytes 52-55: embedded LC fragment at encode_emblc position 1/2/3
                 # byte  56:    EMB header byte for this burst position, masked & 0xFE
-                pos      = dtype + 1   # encode_emblc positions: 1=B, 2=C, 3=D
+                pos      = max(dtype, 1)          # encode_emblc positions: 1=B, 2=C, 3=D
                 emb_frag = (self._in_emb_lc[ts][pos].tobytes()
                             if self._in_emb_lc[ts] and pos in self._in_emb_lc[ts]
                             else _NULL_EMB_LC.tobytes())
-                emb_hdr  = EMB[_EMB_BURST_NAMES[dtype]][:8].tobytes()[0] & 0xFE
+                emb_hdr  = EMB[_EMB_BURST_NAMES[pos - 1]][:8].tobytes()[0] & 0xFE
                 gv_payload = (bytes([slot_burst]) + b'\x19\x06' + ambe_19
                               + emb_frag + bytes([emb_hdr]))
-
-            else:
-                # dtype >= 5: HBlink occasionally sends a 6th non-sync VOICE frame
-                # (beyond the standard 5-frame B-F sequence).  Forward as null-LC
-                # burst — same wire format as burst F.
-                log.debug('Unexpected HBP VOICE dtype %d — forwarding as null-LC burst', dtype)
-                gv_payload = bytes([slot_burst]) + b'\x19\x06' + ambe_19 + b'\x00\x00\x00\x00\x10'
 
             rtp_pt = 0x5d
 
