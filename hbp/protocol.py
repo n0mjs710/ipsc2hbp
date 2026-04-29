@@ -38,7 +38,8 @@ from hbp.const import (
     RPTC_SLOTS_VALUE,
 )
 
-log = logging.getLogger(__name__)
+log   = logging.getLogger(__name__)
+_wire = logging.getLogger('hbp.wire')
 
 _KA_INTERVAL = 5.0    # seconds between RPTPING
 _MAX_KA_AGE  = 15.0   # seconds without pong → disconnect (3 × KA_INTERVAL)
@@ -108,6 +109,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr):
         if len(data) < 4:
             return
+        _wire.debug('HBP RECV %d %s', len(data), data.hex())
         cmd4 = data[:4]
 
         # Dispatch by longest-match prefix
@@ -208,10 +210,12 @@ class _HBPProtocol(asyncio.DatagramProtocol):
 
     def _send_raw(self, data: bytes):
         if self._transport:
+            _wire.debug('HBP SEND %d %s', len(data), data.hex())
             self._transport.sendto(data)
 
     def send_dmrd(self, data: bytes):
         if self._state == 'CONNECTED' and self._transport:
+            _wire.debug('HBP SEND %d %s', len(data), data.hex())
             self._transport.sendto(data)
 
     def is_connected(self) -> bool:

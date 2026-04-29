@@ -47,14 +47,15 @@ def main():
         sys.exit(f'Configuration error: {exc}')
 
     if args.wire:
-        # Wire mode: only the ipsc.wire logger at DEBUG; silence everything else.
+        # Wire mode: ipsc.wire and hbp.wire at DEBUG; silence everything else.
         logging.getLogger().setLevel(logging.WARNING)
         wire_handler = logging.StreamHandler(sys.stderr)
         wire_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
-        wire_log = logging.getLogger('ipsc.wire')
-        wire_log.setLevel(logging.DEBUG)
-        wire_log.addHandler(wire_handler)
-        wire_log.propagate = False
+        for name in ('ipsc.wire', 'hbp.wire'):
+            wl = logging.getLogger(name)
+            wl.setLevel(logging.DEBUG)
+            wl.addHandler(wire_handler)
+            wl.propagate = False
     else:
         log_level = args.log_level.upper() if args.log_level else cfg.log_level
         _setup_logging(log_level)
