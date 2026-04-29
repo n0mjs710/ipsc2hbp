@@ -281,7 +281,7 @@ class CallTranslator:
             embed = self._build_embed(pos, self._out_emb_lc[ts])
             frame_bits = a1_72 + a2_72[:36] + embed + a2_72[36:] + a3_72
             payload_33 = frame_bits.tobytes()
-            flags |= HBPF_FRAMETYPE_VOICESYNC if pos == 0 else (HBPF_FRAMETYPE_VOICE | (pos - 1))
+            flags |= HBPF_FRAMETYPE_VOICESYNC if pos == 0 else (HBPF_FRAMETYPE_VOICE | pos)
             self._out_frame_pos[ts] += 1
 
         dmrd = (
