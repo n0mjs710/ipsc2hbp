@@ -27,14 +27,14 @@ DE_REG_REQ         = 0x9A   # PROCESS — repeater deregistering
 DE_REG_REPLY       = 0x9B   # SEND — our deregister acknowledgement
 
 # ---------------------------------------------------------------------------
-# Post-original-firmware opcodes — purpose not fully known
+# Observed-but-unidentified opcodes
 # ---------------------------------------------------------------------------
 # 0xF0: observed in wire captures from later repeater firmware.  Always 9 bytes:
 #   opcode(1) + peer_radio_id(4) + 00000000(4).  Consistently follows
-#   MASTER_ALIVE_REPLY in every keepalive cycle.  No response sent.  Purpose
-#   unknown — possibly a keepalive acknowledgement, possibly RDAC-related.
-#   Documented here from observation only; no assumption about intent is made.
-MASTER_ACK         = 0xF0   # Ignore (log DEBUG) — observed post-firmware, purpose unknown
+#   MASTER_ALIVE_REPLY in every keepalive cycle.  No response sent.  No known
+#   purpose — possibly a keepalive acknowledgement, possibly RDAC-related.
+#   Documented from observation only; no assumption about intent is made.
+OPCODE_0xF0        = 0xF0   # Ignore (log DEBUG) — observed, benign, no response sent
 
 # ---------------------------------------------------------------------------
 # Burst data type byte values — timeslot is encoded inside this byte

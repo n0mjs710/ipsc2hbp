@@ -48,7 +48,7 @@ OPCODES = {
     0x92: 'PEER_LIST_REQ',   0x93: 'PEER_LIST_REPLY',
     0x96: 'MASTER_ALIVE_REQ',0x97: 'MASTER_ALIVE_REPLY',
     0x9A: 'DE_REG_REQ',      0x9B: 'DE_REG_REPLY',
-    0xF0: 'MASTER_ACK',
+    0xF0: '0xF0(observed/benign)',
 }
 
 BURST_NAMES = {

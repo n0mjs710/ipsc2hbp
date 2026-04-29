@@ -20,7 +20,7 @@ from ipsc.const import (
     MASTER_REG_REQ, MASTER_REG_REPLY,
     PEER_LIST_REQ, PEER_LIST_REPLY,
     MASTER_ALIVE_REQ, MASTER_ALIVE_REPLY,
-    DE_REG_REQ, DE_REG_REPLY, MASTER_ACK,
+    DE_REG_REQ, DE_REG_REPLY, OPCODE_0xF0,
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
     UNKNOWN_COLLISION, XCMP_XNL,
     VOICE_HEAD, VOICE_TERM,
@@ -128,9 +128,10 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             log.debug('Data packet 0x%02x from %s:%d — ignored', opcode, host, port)
         elif opcode == UNKNOWN_COLLISION:
             log.debug('UNKNOWN_COLLISION from %s:%d', host, port)
-        elif opcode == MASTER_ACK:
-            log.debug('MASTER_ACK (0xF0) from %s:%d — purpose unknown, ignored', host, port)
-        # All other opcodes silently ignored
+        elif opcode == OPCODE_0xF0:
+            log.debug('unknown opcode 0xF0 from %s:%d — observed, benign, no response sent', host, port)
+        else:
+            log.warning('unknown opcode 0x%02x from %s:%d len=%d — no handler  raw=%s', opcode, host, port, len(data), data.hex())
 
     # ------------------------------------------------------------------
     # Opcode handlers
