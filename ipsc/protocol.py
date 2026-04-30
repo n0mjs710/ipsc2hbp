@@ -33,6 +33,25 @@ from ipsc.const import (
 log = logging.getLogger(__name__)
 _wire = logging.getLogger('ipsc.wire')   # enable with --wire; logs raw hex only
 
+# Opcodes known from DMRlink that ipsc2hbp receives but does not process.
+# Logged at DEBUG so they're visible without polluting WARNING.
+_KNOWN_UNHANDLED = {
+    0x05: 'CALL_CONFIRMATION',   # confirmed-call acknowledgement from recipient
+    0x54: 'TXT_MESSAGE_ACK',     # text message ack (sent on success OR failure)
+    0x61: 'CALL_MON_STATUS',     # call monitor — exact meaning unknown
+    0x62: 'CALL_MON_RPT',        # call monitor — exact meaning unknown
+    0x63: 'CALL_MON_NACK',       # call monitor — exact meaning unknown
+    0x85: 'RPT_WAKE_UP',         # similar to OTA DMR wake-up
+    0x91: 'MASTER_REG_REPLY',    # peer→master registration reply (we are master, not peer)
+    0x93: 'PEER_LIST_REPLY',     # peer list reply (we are master, not peer)
+    0x94: 'PEER_REG_REQ',        # peer-to-peer registration request
+    0x95: 'PEER_REG_REPLY',      # peer-to-peer registration reply
+    0x97: 'MASTER_ALIVE_REPLY',  # keepalive reply (we are master, not peer)
+    0x98: 'PEER_ALIVE_REQ',      # peer keepalive request
+    0x99: 'PEER_ALIVE_REPLY',    # peer keepalive reply
+    0x9B: 'DE_REG_REPLY',        # de-registration reply (we are master, not peer)
+}
+
 # Our MODE byte: operational (0x40) + digital (0x20) + TS1 on (0x08) + TS2 on (0x02)
 _OUR_MODE = b'\x6A'
 
@@ -129,7 +148,9 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         elif opcode == UNKNOWN_COLLISION:
             log.debug('UNKNOWN_COLLISION from %s:%d', host, port)
         elif opcode == OPCODE_0xF0:
-            log.debug('unknown opcode 0xF0 from %s:%d — observed, benign, no response sent', host, port)
+            log.debug('0xF0 from %s:%d — observed, benign, no response sent', host, port)
+        elif opcode in _KNOWN_UNHANDLED:
+            log.debug('%s (0x%02x) from %s:%d — received, not handled', _KNOWN_UNHANDLED[opcode], opcode, host, port)
         else:
             log.warning('unknown opcode 0x%02x from %s:%d len=%d — no handler  raw=%s', opcode, host, port, len(data), data.hex())
 
