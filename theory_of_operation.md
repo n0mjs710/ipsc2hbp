@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-`ipsc2hbp` is a single-process, bidirectional protocol translator that connects one Motorola MOTOTRBO repeater to one upstream DMR network server. It presents itself to the repeater as an IPSC master, and presents itself to the network as an HBP repeater/peer. Between them it converts voice call frames in real time.
+`ipsc2hbp` is a single-process, bidirectional protocol translator that connects one or more Motorola MOTOTRBO repeaters to one upstream DMR network server. It presents itself to the repeaters as a full IPSC master (supporting up to 14 simultaneous IPSC peers), and presents itself to the network as an HBP repeater/peer. Between them it converts voice call frames in real time.
 
 The previous solution for this problem was two separate Python 2 processes — `IPSC_Bridge` from DMRlink and `HB_Bridge` from HBlink — communicating over a local UDP socket using an intermediate AMBE frame format. `ipsc2hbp` replaces both with a single Python 3 process that translates directly in memory, with no inter-process communication.
 
@@ -82,8 +82,8 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 - `bind_ip` — local IP to bind the IPSC UDP socket (`0.0.0.0` for all interfaces)
 - `bind_port` — UDP port the repeater connects to (must match the codeplug)
 - `ipsc_master_id` — radio ID this translator presents as the IPSC master node
-- `ipsc_peer_id` — radio ID of the Motorola repeater; if set, only that ID is accepted; if 0 or omitted, any peer ID is accepted (wildcard mode)
-- `allowed_peer_ip` — optional; if set, only registrations from this source IP are accepted regardless of peer state or radio ID
+- `allowed_peer_ids` — TOML array of integers; if non-empty, only repeaters with a listed radio ID may register; empty (`[]`) accepts any radio ID
+- `allowed_peer_ips` — TOML array of strings; if non-empty, only registrations from listed source IPs are accepted; empty (`[]`) accepts any source IP
 - `auth_enabled` — boolean; enables HMAC-SHA1 packet authentication
 - `auth_key` — hex string, up to 40 hex chars (20 bytes); shorter keys are left-zero-padded
 - `keepalive_watchdog` — seconds without keepalive before declaring peer lost (minimum 5)
@@ -91,7 +91,7 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 **`[hbp]`**
 - `master_ip`, `master_port` — upstream HBP server address
 - `passphrase` — plaintext passphrase for the HBP master (encoded to bytes internally)
-- `hbp_repeater_id` — radio ID sent in all HBP packets; defaults to `ipsc_peer_id` when 0 or omitted; at least one of `ipsc_peer_id` or `hbp_repeater_id` must be non-zero
+- `hbp_repeater_id` — radio ID sent in all HBP packets; required, must be non-zero
 - `hbp_mode` — `TRACKING` or `PERSISTENT` (see section 6.3)
 - `options` — RPTO options string, e.g. `"TS1=91,310;TS2=*"`; empty = skip RPTO step
 - RPTC announcement fields: `callsign`, `rx_freq`, `tx_freq`, `tx_power`, `colorcode`, `latitude`, `longitude`, `height`, `location`, `description`, `url`, `software_id`, `package_id`
@@ -123,31 +123,32 @@ All IPSC opcodes:
 
 | Opcode | Name | Handling |
 |--------|------|---------|
-| `0x05` | CALL_CONFIRMATION | Ignored |
-| `0x54` | TXT_MESSAGE_ACK | Ignored |
-| `0x61` | CALL_MON_STATUS | Ignored |
-| `0x62` | CALL_MON_RPT | Ignored |
-| `0x63` | CALL_MON_NACK | Ignored |
-| `0x70` | XCMP_XNL | **NEVER process** — logged DEBUG only; these packets can damage repeater RF configuration |
+| `0x05` | CALL_CONFIRMATION | DEBUG logged — received, not handled |
+| `0x54` | TXT_MESSAGE_ACK | DEBUG logged — received, not handled |
+| `0x61` | CALL_MON_STATUS | DEBUG logged — received, not handled |
+| `0x62` | CALL_MON_RPT | DEBUG logged — received, not handled |
+| `0x63` | CALL_MON_NACK | DEBUG logged — received, not handled |
+| `0x70` | XCMP_XNL | **NEVER process** — DEBUG logged only; these packets can damage repeater RF configuration |
 | `0x80` | GROUP_VOICE | Processed — primary payload |
-| `0x81` | PVT_VOICE | Ignored (logged DEBUG) |
-| `0x83` | GROUP_DATA | Ignored (logged DEBUG) |
-| `0x84` | PVT_DATA | Ignored (logged DEBUG) |
-| `0x85` | RPT_WAKE_UP | Ignored |
-| `0x86` | UNKNOWN_COLLISION | Ignored (logged DEBUG) |
+| `0x81` | PVT_VOICE | DEBUG logged — ignored |
+| `0x83` | GROUP_DATA | DEBUG logged — ignored |
+| `0x84` | PVT_DATA | DEBUG logged — ignored |
+| `0x85` | RPT_WAKE_UP | DEBUG logged — received, not handled |
+| `0x86` | UNKNOWN_COLLISION | DEBUG logged — ignored |
 | `0x90` | MASTER_REG_REQ | Processed — registration |
-| `0x91` | MASTER_REG_REPLY | Sent — our registration reply |
-| `0x92` | PEER_LIST_REQ | Processed — peer list request |
-| `0x93` | PEER_LIST_REPLY | Sent — our peer list |
-| `0x94` | PEER_REG_REQ | Ignored |
-| `0x95` | PEER_REG_REPLY | Ignored |
+| `0x91` | MASTER_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
+| `0x92` | PEER_LIST_REQ | Processed — returns all registered peers |
+| `0x93` | PEER_LIST_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
+| `0x94` | PEER_REG_REQ | DEBUG logged — received, not handled |
+| `0x95` | PEER_REG_REPLY | DEBUG logged — received, not handled |
 | `0x96` | MASTER_ALIVE_REQ | Processed — keepalive from repeater |
-| `0x97` | MASTER_ALIVE_REPLY | Sent — keepalive acknowledgement |
-| `0x98` | PEER_ALIVE_REQ | Ignored |
-| `0x99` | PEER_ALIVE_REPLY | Ignored |
+| `0x97` | MASTER_ALIVE_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
+| `0x98` | PEER_ALIVE_REQ | DEBUG logged — received, not handled |
+| `0x99` | PEER_ALIVE_REPLY | DEBUG logged — received, not handled |
 | `0x9A` | DE_REG_REQ | Processed — deregistration |
-| `0x9B` | DE_REG_REPLY | Sent — deregister acknowledgement |
-| All others | — | Silently ignored |
+| `0x9B` | DE_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
+| `0xF0` | OPCODE_0xF0 | DEBUG logged — observed benign; appears post-keepalive in later firmware |
+| All others | — | WARNING logged with opcode and raw hex payload |
 
 ### 4.4 Registration Handshake
 
@@ -162,8 +163,10 @@ Bytes 6–9:   Flags (4 bytes, capability / link-type flags)
 ```
 
 Radio ID validation:
-- If `ipsc_peer_id` is non-zero and `peer_id_int != ipsc_peer_id` → log WARNING, drop
-- If `ipsc_peer_id` is 0 (wildcard) → any peer radio ID is accepted
+- If `allowed_peer_ids` is non-empty and `peer_id_int not in allowed_peer_ids` → log WARNING, drop
+- If `allowed_peer_ids` is empty → any peer radio ID is accepted
+- If `allowed_peer_ips` is non-empty and source IP not in `allowed_peer_ips` → log WARNING, drop
+- Capacity check: if 14 peers already registered → log WARNING, drop
 
 **MASTER_REG_REPLY sent** (16 bytes before auth):
 ```
@@ -192,7 +195,7 @@ Byte  17:    Repeater's mode byte (echoed back)
 
 The repeater sends `MASTER_ALIVE_REQ` (opcode `0x96`) periodically. ipsc2hbp responds with `MASTER_ALIVE_REPLY` (opcode `0x97`, 14 bytes: master_id + ts_flags + IPSC_VER) and updates `_last_ka = time()`.
 
-A background asyncio task checks every 5 seconds: if `time() - _last_ka > keepalive_watchdog`, the peer is declared lost — registration state is cleared and `CallTranslator.peer_lost()` is called.
+A background asyncio task checks every 5 seconds: for each registered peer, if `time() - peer['last_ka'] > keepalive_watchdog`, that peer is removed. `CallTranslator.peer_lost()` is called only when the last peer is removed (N→0 transition).
 
 ### 4.6 GROUP_VOICE Packet Layout
 
@@ -547,11 +550,13 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 |-------|-------|
 | Startup parameters | INFO |
 | Shutdown (SIGTERM / SIGINT) | INFO |
-| IPSC peer registered / re-registered | INFO |
-| IPSC peer lost (watchdog or DE_REG) | WARNING |
-| IPSC peer rejected — radio ID mismatch | WARNING |
-| IPSC peer rejected — source IP not allowed | WARNING |
-| IPSC peer rejected — hijack attempt (different IP) | WARNING |
+| IPSC peer joined (first peer, 0→1) | INFO |
+| IPSC peer registered or re-registered | INFO |
+| IPSC peer lost (watchdog or DE_REG); last peer gone (N→0) | WARNING |
+| IPSC peer rejected — radio ID not in allowed_peer_ids | WARNING |
+| IPSC peer rejected — source IP not in allowed_peer_ips | WARNING |
+| IPSC peer rejected — capacity (14 peers already registered) | WARNING |
+| IPSC peer rejected — hijack attempt (different IP for same ID) | WARNING |
 | IPSC auth failure | WARNING |
 | HBP connected | INFO |
 | HBP disconnected (watchdog or close) | WARNING |
@@ -581,7 +586,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 | Private voice calls | Group voice only |
 | Data calls (GROUP_DATA, PVT_DATA) | Dropped silently |
 | XNL / XCMP processing | ignored |
-| Multiple IPSC peers | One repeater only |
+| More than 14 simultaneous IPSC peers | IPSC protocol maximum is 15 including the master |
 | Multiple HBP upstream masters | One network server only |
 | Conference, bridging, routing | Not this tool |
 | ACL / filtering | Upstream master's responsibility |

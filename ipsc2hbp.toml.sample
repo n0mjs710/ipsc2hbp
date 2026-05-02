@@ -18,18 +18,16 @@ bind_port = 50000
 # This is NOT the repeater's radio ID — use a unique value for this system.
 ipsc_master_id = 9999999
 
-# Radio ID of the Motorola repeater (the IPSC peer).
-# If set, only a repeater with this radio ID may register (enforced strictly).
-# If omitted or set to 0, any repeater radio ID is accepted (wildcard mode).
-# Also used as the HBP repeater ID by default — see hbp_repeater_id below.
-ipsc_peer_id = 3120000
+# Optional: restrict which repeater radio IDs may register.
+# TOML array of integers. Omit or leave empty ([]) to accept any radio ID.
+# IPSC supports 15 peers maximum including the master, so at most 14 may connect.
+# allowed_peer_ids = [3120000, 3120001]
+allowed_peer_ids = []
 
-# Optional: restrict registration to a specific source IP address.
-# If set, any MASTER_REG_REQ from a different IP is silently dropped (WARNING logged).
-# Leave empty ("") to accept registrations from any IP.
-# Note: source port is not checked — NAT may change it between registrations.
-# allowed_peer_ip = "192.168.1.100"
-allowed_peer_ip = ""
+# Optional: restrict which source IP addresses may register.
+# TOML array of strings. Omit or leave empty ([]) to accept any source IP.
+# allowed_peer_ips = ["192.168.1.100", "192.168.1.101"]
+allowed_peer_ips = []
 
 # IPSC HMAC-SHA1 authentication.
 # Must match the auth key programmed in the repeater codeplug.
@@ -50,10 +48,9 @@ keepalive_watchdog = 60
 master_ip   = "127.0.0.1"
 master_port = 62031
 
-# HBP repeater ID sent in all HBP packets.
-# If omitted or set to 0, ipsc_peer_id is used.
-# Must be set explicitly if ipsc_peer_id is 0 (wildcard mode).
-# hbp_repeater_id = 3120000
+# HBP repeater ID sent in all HBP packets.  Required — must be non-zero.
+# Typically the radio ID of the primary repeater, or a unique ID for this system.
+hbp_repeater_id = 3120000
 
 # Passphrase for the HBP master (must match the master's configuration).
 passphrase = "passw0rd"
@@ -63,9 +60,8 @@ passphrase = "passw0rd"
 #               Disconnect when the repeater goes away. Recommended.
 # "PERSISTENT": Keep the HBP connection up regardless of repeater state.
 #               Useful to keep the system visible on network dashboards.
-#               Requires ipsc_peer_id or hbp_repeater_id to be non-zero —
-#               the HBP connection is established at startup, before any
-#               repeater registers, so a radio ID must be pre-configured.
+#               Requires hbp_repeater_id to be non-zero — the HBP connection
+#               is established at startup, before any repeater registers.
 hbp_mode = "TRACKING"
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 **NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it invovles painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
 
-**PURPOSE:** A single, small Python 3 daemon that connects one Motorola MOTOTRBO repeater — via the proprietary IPSC protocol — to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
+**PURPOSE:** A single, small Python 3 daemon that connects one or more Motorola MOTOTRBO repeaters — via the proprietary IPSC protocol — to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.). Functions as a full IPSC master, supporting up to 14 simultaneous IPSC peers.
 
 **WHY THIS EXISTS:**
 
@@ -12,7 +12,7 @@ The previous solution to this problem was a pair of Python 2 applications: `IPSC
 
 **DESIGN GOALS:**
 
-- **Transparent translation only.** No routing, bridging, talkgroup filtering, or rewriting. One repeater in, one network out, pass everything through unchanged.
+- **Transparent translation only.** No routing, bridging, talkgroup filtering, or rewriting. IPSC peers in, one network out, pass everything through unchanged.
 - **Single asyncio event loop.** No threads, no subprocesses, no sockets between components. Both protocol stacks run concurrently in one Python process.
 - **One config file.** TOML. Copy the sample, fill in your repeater ID, passphrase, and frequencies. Done.
 - **Correct over clever.** Protocol behavior is derived from the DMRlink and HBlink source — not the published specs, which contain several errors. Where the spec disagrees with working code, the code wins.
@@ -20,7 +20,7 @@ The previous solution to this problem was a pair of Python 2 applications: `IPSC
 
 **WHAT IT IS NOT:**
 
-This is not a general-purpose bridge, reflector, or network controller. It does not route between talkgroups, doesn't talk to multiple repeaters. It will be tested to work with HBlink4, but should work with most HBP speaking network servers.
+This is not a general-purpose bridge, reflector, or network controller. It does not route between talkgroups, filter, or rewrite calls. It works with HBlink4 and should work with any HBP-speaking network server.
 
 **REQUIREMENTS:**
 

@@ -71,8 +71,8 @@ after the last documented field.  The digest is computed over the packet body
 | 17 | 1 | Peer MODE | peer's MODE byte (echoed from REG_REQ) |
 | [18] | 10 | Auth digest | if auth enabled |
 
-**Total:** 18 bytes for 1 peer (+ 10 if auth).
-Multiple peers would extend the peer data section; we always send exactly 1 peer.
+**Total:** 7 + (11 × N) bytes where N is the number of registered peers (+ 10 if auth).
+One 11-byte entry per registered peer. When no peers are registered, peer data length is 0 and no entries follow.
 
 ---
 
@@ -133,7 +133,7 @@ and is typically set to keep UDP NAT translations alive through aggressive firew
 
 ---
 
-### MASTER_ACK (0xF0) — received from peer, post-original-firmware
+### OPCODE_0xF0 (0xF0) — received from peer, post-original-firmware
 
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
