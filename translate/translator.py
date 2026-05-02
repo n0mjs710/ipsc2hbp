@@ -185,9 +185,7 @@ class CallTranslator:
     # IPSC callbacks
     # ------------------------------------------------------------------
 
-    def peer_registered(self, peer_id: bytes, host: str, port: int):
-        log.info('IPSC peer registered: id=%d  %s:%d',
-                 int.from_bytes(peer_id, 'big'), host, port)
+    def peer_joined(self):
         if self._cfg.hbp_mode == 'TRACKING':
             self._hbp.activate()
 
@@ -334,7 +332,7 @@ class CallTranslator:
 
     def hbp_voice_received(self, dmrd: bytes):
         """Inbound HBP → IPSC."""
-        if not self._ipsc.is_peer_registered():
+        if not self._ipsc.has_peers():
             return
         if len(dmrd) < DMRD_LEN:
             return
@@ -423,7 +421,7 @@ class CallTranslator:
         self._in_rtp_seq[ts] += 1
         self._in_rtp_ts[ts]  += 480
         rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
-        self._ipsc.send_to_peer(
+        self._ipsc.send_voice(
             self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
         )
 
@@ -494,5 +492,5 @@ class CallTranslator:
     def is_hbp_connected(self) -> bool:
         return self._hbp is not None and self._hbp.is_connected()
 
-    def is_ipsc_registered(self) -> bool:
-        return self._ipsc is not None and self._ipsc.is_peer_registered()
+    def has_ipsc_peers(self) -> bool:
+        return self._ipsc is not None and self._ipsc.has_peers()

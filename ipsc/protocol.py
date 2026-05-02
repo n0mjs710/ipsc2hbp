@@ -1,8 +1,11 @@
 """
 IPSC master stack — asyncio DatagramProtocol.
 
-Handles one Motorola MOTOTRBO repeater connecting to us as the IPSC master.
-Manages registration, keep-alive, watchdog, and GROUP_VOICE dispatch.
+Handles up to 14 Motorola MOTOTRBO repeaters connecting as IPSC peers
+(IPSC supports 15 peers maximum; the master counts as one).
+
+Manages registration, peer list distribution, per-peer keepalive watchdog,
+and GROUP_VOICE dispatch.
 
 Packet layout confirmed from DMRlink IPSC_Bridge.py / dmrlink.py source.
 """
@@ -55,22 +58,21 @@ _KNOWN_UNHANDLED = {
 # Our MODE byte: operational (0x40) + digital (0x20) + TS1 on (0x08) + TS2 on (0x02)
 _OUR_MODE = b'\x6A'
 
+# IPSC supports 15 peers maximum; master counts as one, so 14 non-master peers.
+_MAX_PEERS = 14
+
 
 class IPSCProtocol(asyncio.DatagramProtocol):
 
     def __init__(self, config: Config, translator):
-        self._cfg = config
+        self._cfg        = config
         self._translator = translator
-        self._transport = None
+        self._transport  = None
         self._watchdog_task = None
 
-        # Peer state — cleared on loss/de-reg
-        self._registered = False
-        self._peer_id    = b'\x00\x00\x00\x00'
-        self._peer_ip    = ''
-        self._peer_port  = 0
-        self._peer_mode  = b'\x00'
-        self._last_ka    = 0.0
+        # Multi-peer state: keyed by 4-byte peer_id (bytes).
+        # Each value: {'ip': str, 'port': int, 'mode': bytes, 'last_ka': float}
+        self._peers: dict[bytes, dict] = {}
 
         # Precompute constant fields
         self._master_id = config.ipsc_master_id.to_bytes(4, 'big')
@@ -81,7 +83,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         self._our_flags = b'\x00\x00\x00' + bytes([flags_byte4])
         self._ts_flags  = _OUR_MODE + self._our_flags  # 5 bytes
 
-        # Keepalive reply is static (peer_id varies in alive_req but reply uses master_id)
+        # Static reply packets (master_id constant; peer_count inserted dynamically)
         self._alive_reply = (
             bytes([MASTER_ALIVE_REPLY]) + self._master_id + self._ts_flags + IPSC_VER
         )
@@ -93,8 +95,8 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        log.info('IPSC master listening on %s:%d',
-                 self._cfg.ipsc_bind_ip, self._cfg.ipsc_bind_port)
+        log.info('IPSC master listening on %s:%d  (max %d peers)',
+                 self._cfg.ipsc_bind_ip, self._cfg.ipsc_bind_port, _MAX_PEERS)
         self._watchdog_task = asyncio.get_running_loop().create_task(self._watchdog_loop())
 
     def connection_lost(self, exc):
@@ -125,11 +127,13 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             log.debug('XCMP/XNL received from %s:%d — ignored', host, port)
             return
 
-        # Any packet from the registered peer proves it is still alive; reset
-        # watchdog here because IPSC repeaters do not send keepalives during
-        # active voice transmission.
-        if self._registered and host == self._peer_ip and port == self._peer_port:
-            self._last_ka = time()
+        # Any packet from a registered peer proves it is still alive; reset
+        # that peer's watchdog.  Peer identity is in bytes 1–4 for all
+        # management and voice opcodes.  IP must match to prevent spoofing.
+        if len(data) >= 5:
+            pid = data[1:5]
+            if pid in self._peers and self._peers[pid]['ip'] == host:
+                self._peers[pid]['last_ka'] = time()
 
         if opcode == MASTER_REG_REQ:
             self._on_reg_req(data, host, port)
@@ -150,9 +154,11 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         elif opcode == OPCODE_0xF0:
             log.debug('0xF0 from %s:%d — observed, benign, no response sent', host, port)
         elif opcode in _KNOWN_UNHANDLED:
-            log.debug('%s (0x%02x) from %s:%d — received, not handled', _KNOWN_UNHANDLED[opcode], opcode, host, port)
+            log.debug('%s (0x%02x) from %s:%d — received, not handled',
+                      _KNOWN_UNHANDLED[opcode], opcode, host, port)
         else:
-            log.warning('unknown opcode 0x%02x from %s:%d len=%d — no handler  raw=%s', opcode, host, port, len(data), data.hex())
+            log.warning('unknown opcode 0x%02x from %s:%d len=%d — no handler  raw=%s',
+                        opcode, host, port, len(data), data.hex())
 
     # ------------------------------------------------------------------
     # Opcode handlers
@@ -166,105 +172,125 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         peer_id     = data[1:5]
         peer_id_int = int.from_bytes(peer_id, 'big')
         peer_mode   = data[5:6]   # 1-byte MODE
-        peer_flags  = data[6:10]  # 4-byte FLAGS — reserved for future capability negotiation
+        # peer_flags data[6:10] reserved for future capability negotiation
 
-        # Check allowed_peer_ip if configured — reject anything else before going further
-        if self._cfg.allowed_peer_ip and host != self._cfg.allowed_peer_ip:
+        # IP allowlist check
+        if self._cfg.allowed_peer_ips and host not in self._cfg.allowed_peer_ips:
+            log.warning('MASTER_REG_REQ from %s:%d rejected — not in allowed_peer_ips', host, port)
+            return
+
+        # Radio ID allowlist check
+        if self._cfg.allowed_peer_ids and peer_id_int not in self._cfg.allowed_peer_ids:
+            log.warning('MASTER_REG_REQ radio ID %d from %s:%d rejected — not in allowed_peer_ids',
+                        peer_id_int, host, port)
+            return
+
+        is_new_peer = peer_id not in self._peers
+
+        # Capacity check: only applies to genuinely new peers
+        if is_new_peer and len(self._peers) >= _MAX_PEERS:
             log.warning(
-                'MASTER_REG_REQ from %s:%d rejected — not the allowed peer IP (%s)',
-                host, port, self._cfg.allowed_peer_ip,
+                'MASTER_REG_REQ from %s:%d (id=%d) rejected — IPSC system full '
+                '(%d peers registered; IPSC maximum is 15 including the master)',
+                host, port, peer_id_int, len(self._peers),
             )
             return
 
-        # Validate peer radio ID — if ipsc_peer_id is 0 (wildcard), accept any
-        if self._cfg.ipsc_peer_id and peer_id_int != self._cfg.ipsc_peer_id:
+        # Hijack protection: reject a different IP claiming an already-registered peer ID
+        if not is_new_peer and self._peers[peer_id]['ip'] != host:
             log.warning(
-                'MASTER_REG_REQ radio ID %d does not match configured %d — dropped',
-                peer_id_int, self._cfg.ipsc_peer_id,
+                'MASTER_REG_REQ from %s:%d (id=%d) rejected — peer ID already '
+                'registered from %s',
+                host, port, peer_id_int, self._peers[peer_id]['ip'],
             )
             return
 
-        # Block hijacking: while a peer is registered in good standing, reject registrations
-        # from a different source IP.  Same IP + different port is allowed — handles NAT
-        # rebinding without dropping a legitimate repeater's re-registration.
-        if self._registered and host != self._peer_ip:
-            log.warning(
-                'MASTER_REG_REQ from %s:%d rejected — %s already registered in good standing',
-                host, port, self._peer_ip,
-            )
-            return
+        was_empty = len(self._peers) == 0
 
-        was_registered = self._registered
-        self._registered = True
-        self._peer_id   = peer_id
-        self._peer_ip   = host
-        self._peer_port = port
-        self._peer_mode = peer_mode
-        self._last_ka   = time()
+        self._peers[peer_id] = {
+            'ip':      host,
+            'port':    port,
+            'mode':    peer_mode,
+            'last_ka': time(),
+        }
 
-        # MASTER_REG_REPLY:
-        # 0x91 + master_id(4) + ts_flags(5) + num_peers(2) + IPSC_VER(4)
+        # MASTER_REG_REPLY: 0x91 + master_id(4) + ts_flags(5) + num_peers(2) + IPSC_VER(4)
         reg_reply = (
             bytes([MASTER_REG_REPLY])
             + self._master_id
             + self._ts_flags
-            + struct.pack('>H', 1)   # 1 peer
+            + struct.pack('>H', len(self._peers))
             + IPSC_VER
         )
         self._send(reg_reply, host, port)
         self._send_peer_list(host, port)
 
-        if not was_registered:
-            log.info('IPSC peer registered: id=%d  %s:%d', peer_id_int, host, port)
-            self._translator.peer_registered(peer_id, host, port)
+        if is_new_peer:
+            log.info('IPSC peer registered: id=%d  %s:%d  (%d/%d peers)',
+                     peer_id_int, host, port, len(self._peers), _MAX_PEERS)
+            # Broadcast updated peer list to all other registered peers
+            for pid, p in self._peers.items():
+                if pid != peer_id:
+                    self._send_peer_list(p['ip'], p['port'])
+            if was_empty:
+                self._translator.peer_joined()
         else:
             log.info('IPSC peer re-registered: id=%d  %s:%d', peer_id_int, host, port)
 
     def _send_peer_list(self, host: str, port: int):
-        # Peer entry: peer_id(4) + packed_ip(4) + port(2) + mode(1) = 11 bytes
-        try:
-            packed_ip = socket.inet_aton(self._peer_ip)
-        except OSError:
-            packed_ip = b'\x00\x00\x00\x00'
-        peer_entry = (
-            self._peer_id
-            + packed_ip
-            + struct.pack('>H', self._peer_port)
-            + self._peer_mode
-        )
+        """Build and send PEER_LIST_REPLY to a specific host:port."""
+        entries = b''
+        for pid, p in self._peers.items():
+            try:
+                packed_ip = socket.inet_aton(p['ip'])
+            except OSError:
+                packed_ip = b'\x00\x00\x00\x00'
+            entries += pid + packed_ip + struct.pack('>H', p['port']) + p['mode']
+
         peer_list_reply = (
             bytes([PEER_LIST_REPLY])
             + self._master_id
-            + struct.pack('>H', len(peer_entry))
-            + peer_entry
+            + struct.pack('>H', len(entries))
+            + entries
         )
         self._send(peer_list_reply, host, port)
 
     def _on_alive_req(self, data: bytes, host: str, port: int):
-        if not self._registered:
+        if len(data) < 5:
             return
-        if len(data) >= 5 and data[1:5] != self._peer_id:
-            log.debug('MASTER_ALIVE_REQ from unknown peer ID — ignored')
+        peer_id = data[1:5]
+        if peer_id not in self._peers:
+            log.debug('MASTER_ALIVE_REQ from unregistered peer %d at %s:%d — ignored',
+                      int.from_bytes(peer_id, 'big'), host, port)
             return
-        self._last_ka = time()
+        self._peers[peer_id]['last_ka'] = time()
         self._send(self._alive_reply, host, port)
         log.debug('MASTER_ALIVE_REQ → MASTER_ALIVE_REPLY to %s:%d', host, port)
 
     def _on_peer_list_req(self, data: bytes, host: str, port: int):
-        if not self._registered:
+        # Accept the request from any host that is a registered peer (by IP)
+        if not any(p['ip'] == host for p in self._peers.values()):
+            log.debug('PEER_LIST_REQ from unregistered host %s — ignored', host)
             return
         log.debug('PEER_LIST_REQ from %s:%d', host, port)
         self._send_peer_list(host, port)
 
     def _on_de_reg_req(self, data: bytes, host: str, port: int):
-        peer_id_int = int.from_bytes(data[1:5], 'big') if len(data) >= 5 else 0
-        log.warning('IPSC peer de-registering: id=%d  %s:%d', peer_id_int, host, port)
+        peer_id     = data[1:5] if len(data) >= 5 else b'\x00\x00\x00\x00'
+        peer_id_int = int.from_bytes(peer_id, 'big')
+        log.info('IPSC peer de-registering: id=%d  %s:%d', peer_id_int, host, port)
         self._send(self._dereg_reply, host, port)
-        self._clear_peer()
+        self._remove_peer(peer_id)
 
     def _on_group_voice(self, data: bytes, host: str, port: int):
-        if not self._registered:
+        if not self._peers:
             return
+
+        peer_id = data[1:5] if len(data) >= 5 else None
+        if peer_id not in self._peers:
+            log.debug('GROUP_VOICE from unregistered peer at %s:%d — dropped', host, port)
+            return
+
         if len(data) < GV_MIN_LEN:
             log.warning('GROUP_VOICE too short (%d bytes) from %s:%d', len(data), host, port)
             return
@@ -283,6 +309,21 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             ts = 2 if (burst_type & 0x80) else 1
 
         self._translator.ipsc_voice_received(data, ts, burst_type)
+
+    # ------------------------------------------------------------------
+    # Peer lifecycle
+    # ------------------------------------------------------------------
+
+    def _remove_peer(self, peer_id: bytes):
+        """Remove a peer, broadcast updated peer list, notify translator if now empty."""
+        if peer_id not in self._peers:
+            return
+        del self._peers[peer_id]
+        if self._peers:
+            for p in self._peers.values():
+                self._send_peer_list(p['ip'], p['port'])
+        else:
+            self._translator.peer_lost()
 
     # ------------------------------------------------------------------
     # Auth helpers
@@ -313,29 +354,31 @@ class IPSCProtocol(asyncio.DatagramProtocol):
     async def _watchdog_loop(self):
         while True:
             await asyncio.sleep(5)
-            if self._registered:
-                elapsed = time() - self._last_ka
-                if elapsed > self._cfg.keepalive_watchdog:
+            now = time()
+            timed_out = [
+                pid for pid, p in self._peers.items()
+                if now - p['last_ka'] > self._cfg.keepalive_watchdog
+            ]
+            for pid in timed_out:
+                p = self._peers.get(pid)
+                if p:
                     log.warning(
-                        'IPSC watchdog: no keepalive for %.1fs (limit %ds) — peer lost',
-                        elapsed, self._cfg.keepalive_watchdog,
+                        'IPSC watchdog: no keepalive for %.1fs (limit %ds) — '
+                        'peer %d (%s:%d) lost',
+                        now - p['last_ka'], self._cfg.keepalive_watchdog,
+                        int.from_bytes(pid, 'big'), p['ip'], p['port'],
                     )
-                    self._clear_peer()
+                self._remove_peer(pid)
             self._translator.check_call_timeouts()
-
-    def _clear_peer(self):
-        if self._registered:
-            self._registered = False
-            self._translator.peer_lost()
 
     # ------------------------------------------------------------------
     # Public interface for inbound path (HBP → IPSC)
     # ------------------------------------------------------------------
 
-    def send_to_peer(self, packet: bytes):
-        """Send a pre-built GROUP_VOICE packet to the registered repeater."""
-        if self._registered and self._transport:
-            self._send(packet, self._peer_ip, self._peer_port)
+    def send_voice(self, packet: bytes):
+        """Send a pre-built GROUP_VOICE packet to all registered IPSC peers."""
+        for p in self._peers.values():
+            self._send(packet, p['ip'], p['port'])
 
-    def is_peer_registered(self) -> bool:
-        return self._registered
+    def has_peers(self) -> bool:
+        return bool(self._peers)

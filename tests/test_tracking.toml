@@ -8,16 +8,17 @@ log_level = "DEBUG"
 bind_ip            = "127.0.0.1"
 bind_port          = 50000
 ipsc_master_id     = 9999999
-ipsc_peer_id       = 3120000
+allowed_peer_ids   = [3120000]
 auth_enabled       = false
 auth_key           = ""
 keepalive_watchdog = 12
 
 [hbp]
-master_ip   = "127.0.0.1"
-master_port = 62031
-passphrase  = "passw0rd"
-hbp_mode    = "TRACKING"
+master_ip       = "127.0.0.1"
+master_port     = 62031
+hbp_repeater_id = 3120000
+passphrase      = "passw0rd"
+hbp_mode        = "TRACKING"
 
 options     = ""
 callsign    = "W1ABC"

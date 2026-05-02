@@ -18,21 +18,21 @@ class Config:
     ipsc_bind_ip: str
     ipsc_bind_port: int
     ipsc_master_id: int
-    ipsc_peer_id: int      # 0 = accept any peer radio ID (wildcard)
-    allowed_peer_ip: str   # if non-empty, only this source IP may register
+    allowed_peer_ids: frozenset   # int; empty = accept any radio ID
+    allowed_peer_ips: frozenset   # str; empty = accept any source IP
     auth_enabled: bool
-    auth_key: bytes        # 20 bytes, zero-padded from hex config value
+    auth_key: bytes               # 20 bytes, zero-padded from hex config value
     keepalive_watchdog: int
 
     # [hbp]
     hbp_master_ip: str
     hbp_master_port: int
-    hbp_repeater_id: int   # resolved: defaults to ipsc_peer_id when 0; always non-zero
+    hbp_repeater_id: int          # radio ID this system presents to the HBP master
     hbp_passphrase: bytes
     hbp_mode: str
 
     # RPTC announcement fields
-    options: str            # RPTO options string, e.g. "TS1=1,2;TS2=3,4" — empty = no RPTO
+    options: str
     callsign: str
     rx_freq: str
     tx_freq: str
@@ -107,25 +107,47 @@ def load(path: str) -> Config:
     log_level = get_str('global', 'log_level', choices=_VALID_LOG_LEVELS)
 
     # [ipsc]
-    ipsc_bind_ip        = get_str('ipsc', 'bind_ip')
-    ipsc_bind_port      = get_int('ipsc', 'bind_port', min_val=1, max_val=65535)
-    ipsc_master_id      = get_int('ipsc', 'ipsc_master_id', min_val=1)
-    ipsc_peer_id        = get_int('ipsc', 'ipsc_peer_id', required=False, default=0)
-    allowed_peer_ip     = get_str('ipsc', 'allowed_peer_ip', required=False, default='')
-    if allowed_peer_ip:
-        try:
-            socket.inet_aton(allowed_peer_ip)
-        except OSError:
-            errors.append(f'[ipsc] allowed_peer_ip: not a valid IPv4 address: {allowed_peer_ip!r}')
-    auth_enabled        = get_bool('ipsc', 'auth_enabled')
-    keepalive_watchdog  = get_int('ipsc', 'keepalive_watchdog', min_val=5)
+    ipsc_bind_ip   = get_str('ipsc', 'bind_ip')
+    ipsc_bind_port = get_int('ipsc', 'bind_port', min_val=1, max_val=65535)
+    ipsc_master_id = get_int('ipsc', 'ipsc_master_id', min_val=1)
+
+    # allowed_peer_ids: optional array of integers; empty = accept any radio ID
+    raw_peer_ids = raw.get('ipsc', {}).get('allowed_peer_ids', [])
+    if not isinstance(raw_peer_ids, list):
+        errors.append('[ipsc] allowed_peer_ids: must be an array of integers')
+        raw_peer_ids = []
+    allowed_peer_ids = frozenset()
+    for v in raw_peer_ids:
+        if not isinstance(v, int) or isinstance(v, bool):
+            errors.append(f'[ipsc] allowed_peer_ids: all entries must be integers, got {v!r}')
+        else:
+            allowed_peer_ids = allowed_peer_ids | {v}
+
+    # allowed_peer_ips: optional array of strings; empty = accept any source IP
+    raw_peer_ips = raw.get('ipsc', {}).get('allowed_peer_ips', [])
+    if not isinstance(raw_peer_ips, list):
+        errors.append('[ipsc] allowed_peer_ips: must be an array of strings')
+        raw_peer_ips = []
+    allowed_peer_ips = frozenset()
+    for v in raw_peer_ips:
+        if not isinstance(v, str):
+            errors.append(f'[ipsc] allowed_peer_ips: all entries must be strings, got {v!r}')
+        else:
+            try:
+                socket.inet_aton(v.strip())
+                allowed_peer_ips = allowed_peer_ips | {v.strip()}
+            except OSError:
+                errors.append(f'[ipsc] allowed_peer_ips: not a valid IPv4 address: {v!r}')
+
+    auth_enabled       = get_bool('ipsc', 'auth_enabled')
+    keepalive_watchdog = get_int('ipsc', 'keepalive_watchdog', min_val=5)
 
     auth_key = b'\x00' * 20
     if auth_enabled:
         raw_key = get_str('ipsc', 'auth_key', required=True)
         raw_key = raw_key.strip()
         if len(raw_key) > 40:
-            errors.append(f'[ipsc] auth_key: must be at most 40 hex characters')
+            errors.append('[ipsc] auth_key: must be at most 40 hex characters')
         else:
             try:
                 auth_key = bytes.fromhex(raw_key.zfill(40))
@@ -136,7 +158,7 @@ def load(path: str) -> Config:
     hbp_master_ip   = get_str('hbp', 'master_ip')
     hbp_master_port = get_int('hbp', 'master_port', min_val=1, max_val=65535)
     hbp_mode        = get_str('hbp', 'hbp_mode', choices=_VALID_HBP_MODES)
-    hbp_repeater_id = get_int('hbp', 'hbp_repeater_id', required=False, default=0)
+    hbp_repeater_id = get_int('hbp', 'hbp_repeater_id', required=True, min_val=1)
 
     raw_passphrase = get_str('hbp', 'passphrase')
     hbp_passphrase = raw_passphrase.encode()
@@ -160,28 +182,19 @@ def load(path: str) -> Config:
     if errors:
         raise ValueError('Configuration errors:\n' + '\n'.join(f'  {e}' for e in errors))
 
-    # Resolve hbp_repeater_id — falls back to ipsc_peer_id when not explicitly set
-    resolved_repeater_id = hbp_repeater_id if hbp_repeater_id else ipsc_peer_id
-
-    if not resolved_repeater_id:
-        errors.append(
-            'At least one of [ipsc] ipsc_peer_id or [hbp] hbp_repeater_id must be set — '
-            'HBP requires a radio ID to connect with'
-        )
-
     return Config(
         log_level=log_level,
         ipsc_bind_ip=ipsc_bind_ip,
         ipsc_bind_port=ipsc_bind_port,
         ipsc_master_id=ipsc_master_id,
-        ipsc_peer_id=ipsc_peer_id,
-        allowed_peer_ip=allowed_peer_ip,
+        allowed_peer_ids=allowed_peer_ids,
+        allowed_peer_ips=allowed_peer_ips,
         auth_enabled=auth_enabled,
         auth_key=auth_key,
         keepalive_watchdog=keepalive_watchdog,
         hbp_master_ip=hbp_master_ip,
         hbp_master_port=hbp_master_port,
-        hbp_repeater_id=resolved_repeater_id,
+        hbp_repeater_id=hbp_repeater_id,
         hbp_passphrase=hbp_passphrase,
         hbp_mode=hbp_mode,
         options=options,

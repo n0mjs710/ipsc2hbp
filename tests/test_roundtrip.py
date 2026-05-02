@@ -39,9 +39,9 @@ AMBE_END = 52
 class _MockIPSC:
     def __init__(self):
         self.sent = []
-    def is_peer_registered(self):
+    def has_peers(self):
         return True
-    def send_to_peer(self, pkt):
+    def send_voice(self, pkt):
         self.sent.append(bytes(pkt))
 
 
