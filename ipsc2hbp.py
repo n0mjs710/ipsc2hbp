@@ -61,8 +61,8 @@ def main():
         _setup_logging(log_level)
 
     log = logging.getLogger('ipsc2hbp')
-    log.info('ipsc2hbp starting — IPSC master_id=%d  peer_id=%d  HBP %s:%d  mode=%s',
-             cfg.ipsc_master_id, cfg.ipsc_peer_id,
+    log.info('ipsc2hbp starting — IPSC master_id=%d  HBP repeater_id=%d  %s:%d  mode=%s',
+             cfg.ipsc_master_id, cfg.hbp_repeater_id,
              cfg.hbp_master_ip, cfg.hbp_master_port, cfg.hbp_mode)
 
     from ipsc.protocol import IPSCProtocol
