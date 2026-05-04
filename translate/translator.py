@@ -339,10 +339,11 @@ class CallTranslator:
         if len(dmrd) < DMRD_LEN:
             return
 
-        src_sub    = dmrd[DMRD_SRC_OFF  : DMRD_SRC_OFF  + 3]
-        dst_group  = dmrd[DMRD_DST_OFF  : DMRD_DST_OFF  + 3]
-        flags      = dmrd[DMRD_FLAGS_OFF]
-        payload_33 = dmrd[DMRD_PAYLOAD_OFF : DMRD_PAYLOAD_OFF + 33]
+        src_sub     = dmrd[DMRD_SRC_OFF  : DMRD_SRC_OFF  + 3]
+        dst_group   = dmrd[DMRD_DST_OFF  : DMRD_DST_OFF  + 3]
+        flags       = dmrd[DMRD_FLAGS_OFF]
+        hbp_stream  = dmrd[16:20]
+        payload_33  = dmrd[DMRD_PAYLOAD_OFF : DMRD_PAYLOAD_OFF + 33]
 
         ts         = 2 if (flags & HBPF_TGID_TS2) else 1
         self._in_last_pkt[ts] = time()
@@ -428,11 +429,13 @@ class CallTranslator:
         )
 
         if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
-            log.info('HBP call start: src=%d  tg=%d  ts=%d',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
+            log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s',
+                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                     hbp_stream.hex())
         elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
-            log.info('HBP call end:   src=%d  tg=%d  ts=%d',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
+            log.info('HBP call end:   src=%d  tg=%d  ts=%d  stream=%s',
+                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                     hbp_stream.hex())
             self._in_lc[ts]     = None
             self._in_emb_lc[ts] = None
         else:
