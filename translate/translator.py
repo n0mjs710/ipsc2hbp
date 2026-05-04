@@ -263,7 +263,20 @@ class CallTranslator:
 
         else:  # SLOT1_VOICE or SLOT2_VOICE
             if self._out_stream_id[ts] is None:
-                return
+                # Late entry: IPSC Burst E (byte 32 == 0x16) carries dst_group and
+                # src_sub in the header, giving us enough to reconstruct the LC word
+                # and resume forwarding mid-stream. All other burst types lack
+                # unambiguous position information so we keep waiting.
+                if data[32] != 0x16:
+                    return
+                lc = LC_OPT + dst_group + src_sub
+                self._out_stream_id[ts] = os.urandom(4)
+                self._out_lc[ts]        = lc
+                self._out_emb_lc[ts]    = bptc.encode_emblc(lc)
+                self._out_frame_pos[ts] = 4  # Burst E is superframe position 4
+                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from Burst E, stream=%s',
+                         ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                         self._out_stream_id[ts].hex())
             if len(data) < 52:
                 log.warning('SLOT_VOICE too short for AMBE: %d bytes', len(data))
                 return
@@ -377,6 +390,17 @@ class CallTranslator:
             rtp_pt = 0x5e
 
         else:  # VOICESYNC (burst A) or VOICE (bursts B-F)
+            if self._in_lc[ts] is None:
+                # Late entry: src_sub and dst_group are in every DMRD header so we
+                # can reconstruct a valid LC word immediately from any voice burst.
+                lc = LC_OPT + dst_group + src_sub
+                self._in_lc[ts]        = lc
+                self._in_emb_lc[ts]    = bptc.encode_emblc(lc)
+                self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
+                self._in_stream_id[ts] = self._in_stream_ctr
+                log.info('HBP late entry: ts=%d src=%d tg=%d — LC from stream, hbp_stream=%s',
+                         ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                         hbp_stream.hex())
             ambe_19 = _extract_ambe_from_dmrd(payload_33)
 
             if frame_type == HBPF_FRAMETYPE_VOICESYNC:
