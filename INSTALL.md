@@ -8,6 +8,7 @@ Tested on Debian/Ubuntu.  Adapt paths as needed for other distros.
 - git
 
 ## 1 — Clone and enter the repo
+Start in a standard unprivileged user's home directory that will own ipsc2hbp. This is generally the standard user with sudo capability you created when the os was installed.
 
 ```
 git clone https://github.com/n0mjs710/ipsc2hbp.git
