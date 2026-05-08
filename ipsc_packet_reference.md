@@ -24,10 +24,11 @@ after the last documented field.  The digest is computed over the packet body
 | 0 | 1 | Opcode | 0x90 |
 | 1 | 4 | Peer Radio ID | big-endian uint32 |
 | 5 | 1 | Peer MODE | peer capability/mode flags (see MODE byte below) |
-| 6 | 4 | Peer FLAGS | peer capability flags (see FLAGS word below); reserved for future use |
-| [10] | 10 | Auth digest | if auth enabled |
+| 6 | 4 | Peer FLAGS | peer capability flags (see FLAGS word below) |
+| 10 | 4 | IPSC Version | device-reported version (see IPSC Version Field below) |
+| [14] | 10 | Auth digest | if auth enabled |
 
-**Minimum length:** 10 bytes (+ 10 if auth).
+**Total:** 14 bytes (+ 10 if auth) — confirmed from wire captures.  DMRlink constructs this as `opcode + id + MODE + FLAGS + IPSC_VER`.
 
 ---
 
@@ -39,8 +40,8 @@ after the last documented field.  The digest is computed over the packet body
 | 1 | 4 | Master Radio ID | our master ID |
 | 5 | 1 | Master MODE | 0x6A (see MODE byte below) |
 | 6 | 4 | Master FLAGS | 0x00000005 (VOICE_CALL\|MSTR_PEER); +0x10 (PKT_AUTH) if auth enabled |
-| 10 | 2 | Num Peers | always 1 |
-| 12 | 4 | IPSC Version | 0x04020401 (LINK_TYPE_IPSC + VER17 + LINK_TYPE_IPSC + VER16) |
+| 10 | 2 | Num Peers | count of currently registered peers |
+| 12 | 4 | IPSC Version | our reported version (see IPSC Version Field below) |
 | [16] | 10 | Auth digest | if auth enabled |
 
 **Total:** 16 bytes (+ 10 if auth).
@@ -84,7 +85,7 @@ One 11-byte entry per registered peer. When no peers are registered, peer data l
 | 1 | 4 | Peer Radio ID | confirmed from wire captures |
 | 5 | 1 | Peer MODE | same as REG_REQ |
 | 6 | 4 | Peer FLAGS | same as REG_REQ |
-| 10 | 4 | IPSC Version | 0x04020401 |
+| 10 | 4 | IPSC Version | device-reported version (see IPSC Version Field below) |
 | [14] | 10 | Auth digest | if auth enabled |
 
 **Total:** 14 bytes (+ 10 if auth) — confirmed from wire captures.
@@ -104,7 +105,7 @@ and is typically set to keep UDP NAT translations alive through aggressive firew
 | 1 | 4 | Master Radio ID | our master ID |
 | 5 | 1 | Master MODE | 0x6A |
 | 6 | 4 | Master FLAGS | same as REG_REPLY |
-| 10 | 4 | IPSC Version | 0x04020401 |
+| 10 | 4 | IPSC Version | our reported version (see IPSC Version Field below) |
 | [14] | 10 | Auth digest | if auth enabled |
 
 **Total:** 14 bytes (+ 10 if auth).
@@ -150,28 +151,62 @@ Documented from observation only; no assumption about intent is made.
 
 ---
 
+## IPSC Version Field (4 bytes)
+
+Present in MASTER_REG_REQ, MASTER_ALIVE_REQ, and both reply packets.
+
+DMRlink defines our value as **`0x04020401`**, decomposed as `LINK_TYPE_IPSC(0x04) + VER17(0x02) + LINK_TYPE_IPSC(0x04) + VER16(0x01)`.  The exact meaning of this decomposition is not fully understood.
+
+**Version negotiation:** IPSC devices are expected to advertise a version and negotiate down to the least common denominator for the system.  In practice, different device types (repeaters, programming software, console applications) have been observed to report different values.  Wire captures show the same device reporting different values in REG vs. ALIVE packets.  The full semantics — whether individual bytes encode link type, major/minor version, application type, or some combination — are not known and are being determined empirically.  The decode tool displays this field as four decimal bytes (e.g. `4.2.4.1`) to make byte-level differences visible across captures.
+
+---
+
 ## MODE Byte
 
-One byte encoding capability and operational state.  Our value: **0x6A**.
+One byte encoding operational state and capability.  Our value: **0x6A** (operational + digital + TS1 on + TS2 on).
 
-| Bit | Mask | Meaning |
-|-----|------|---------|
-| 6 | 0x40 | Operational |
-| 5 | 0x20 | Digital |
-| 3 | 0x08 | Timeslot 1 active |
-| 1 | 0x02 | Timeslot 2 active |
+The byte uses **bit-pairs** for most fields, not individual bits:
+
+| Bits | Mask | Field | Values |
+|------|------|-------|--------|
+| 7–6 | 0xC0 | Operational | `01` = operational; `00` = not operational; other values undefined |
+| 5–4 | 0x30 | Radio mode | `00` = no radio / software app; `01` = analog; `10` = digital; `11` = unknown |
+| 3–2 | 0x0C | TS1 linked | `10` = on; `01` = off; `00`/`11` = undefined |
+| 1–0 | 0x03 | TS2 linked | `10` = on; `01` = off; `00`/`11` = undefined |
+
+Software applications (programming tools, console apps) typically report `0x40`: operational, no radio, no timeslots.
 
 ---
 
 ## FLAGS Word (4 bytes)
 
-Only byte 4 (the last byte) is used; bytes 1–3 are zero.
+Four bytes of capability flags.  Bytes 0–1 are **undocumented** — treat any non-zero value as significant and record it.  Bytes 2–3 carry known capability bits.
 
-| Bit | Mask | Meaning |
-|-----|------|---------|
-| 2 | 0x04 | Voice calls supported (VOICE_CALL_MSK) |
-| 4 | 0x10 | Packets authenticated (PKT_AUTH_MSK) |
-| 0 | 0x01 | Acting as master (MSTR_PEER_MSK) |
+**Byte 0 (offset 6 in packet):** Unknown.  Observed as `0x00` in all known captures from standard repeaters.
+
+**Byte 1 (offset 7 in packet):** Unknown.  Observed as `0x01` from at least one programming application; `0x00` from standard DMRlink peers.  Purpose not established.
+
+**Byte 2 (offset 8 in packet):**
+
+| Bit | Mask | Flag | Meaning |
+|-----|------|------|---------|
+| 7 | 0x80 | CSBK | CSBK messaging supported |
+| 6 | 0x40 | RPT_MON | Repeater call monitoring supported |
+| 5 | 0x20 | CON_APP | 3rd-party console application |
+| 4–0 | 0x1F | — | Unknown; observed as zero |
+
+**Byte 3 (offset 9 in packet):**
+
+| Bit | Mask | Flag | Meaning |
+|-----|------|------|---------|
+| 7 | 0x80 | XNL_CON | XNL/XCMP connected |
+| 6 | 0x40 | XNL_MASTER | XNL master device |
+| 5 | 0x20 | XNL_SLAVE | XNL slave device |
+| 4 | 0x10 | AUTH | Packets are authenticated (PKT_AUTH_MSK) |
+| 3 | 0x08 | DATA | Data calls supported |
+| 2 | 0x04 | VOICE | Voice calls supported |
+| 1 | 0x02 | — | Unknown; observed as zero |
+| 0 | 0x01 | MASTER | Acting as master (MSTR_PEER_MSK) |
 
 ---
 

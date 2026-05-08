@@ -45,8 +45,10 @@ SLOT1_VOICE = 0x0A   # Voice burst on Timeslot 1
 SLOT2_VOICE = 0x8A   # Voice burst on Timeslot 2 (bit 7 set)
 
 # ---------------------------------------------------------------------------
-# IPSC protocol version — used in MASTER_REG_REPLY and MASTER_ALIVE_REPLY.
-# Source: DMRlink ipsc_const.py — LINK_TYPE_IPSC + IPSC_VER_17 + LINK_TYPE_IPSC + IPSC_VER_16
+# IPSC version field — sent in all registration and keepalive packets.
+# Our value from DMRlink: LINK_TYPE_IPSC(0x04) + VER17(0x02) + LINK_TYPE_IPSC(0x04) + VER16(0x01).
+# Peers report their own values and may differ; the full semantics are not fully
+# understood and are being determined empirically.  See ipsc_packet_reference.md.
 # ---------------------------------------------------------------------------
 IPSC_VER = b'\x04\x02\x04\x01'
 
