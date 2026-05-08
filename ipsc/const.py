@@ -3,16 +3,16 @@
 # ---------------------------------------------------------------------------
 CALL_CONFIRMATION  = 0x05   # Ignore
 TXT_MESSAGE_ACK    = 0x54   # Ignore
-CALL_MON_STATUS    = 0x61   # Ignore — DMRlink: CALL_MON_STATUS; node-dmr-lib: REPEATER_CALL_TRANSMISSION
-CALL_MON_RPT       = 0x62   # Ignore — DMRlink: CALL_MON_RPT;    node-dmr-lib: REPEATER_CALL_CONTROL
-CALL_MON_NACK      = 0x63   # Ignore — DMRlink: CALL_MON_NACK;   node-dmr-lib: REPEATER_BLOCK
+CALL_MON_STATUS    = 0x61   # Ignore — Motorola "call monitor": call event notification (type, status, src/dst, slot, security)
+CALL_MON_RPT       = 0x62   # Ignore — Motorola "call monitor": per-slot state report (ACTIVE/IDLE/DISABLED/REENABLED)
+REPEATER_BLOCKED   = 0x63   # Ignore — signal interference / BSI blocking event (start/end)
 XCMP_XNL           = 0x70   # NEVER TOUCH — can damage repeaters
 GROUP_VOICE        = 0x80   # PROCESS — primary payload
 PVT_VOICE          = 0x81   # Ignore (log DEBUG)
 GROUP_DATA         = 0x83   # Ignore (log DEBUG)
 PVT_DATA           = 0x84   # Ignore (log DEBUG)
 RPT_WAKE_UP        = 0x85   # Ignore — repeater wake-up: seq(4)+slots(1)+type(1)
-UNKNOWN_COLLISION  = 0x86   # Ignore (log DEBUG) — DMRlink: UNKNOWN_COLLISION; node-dmr-lib: CALL_INTERRUPT_REQ
+CALL_INTERRUPT_REQ = 0x86   # Ignore (log DEBUG) — call interrupt request
 MASTER_REG_REQ     = 0x90   # PROCESS — repeater registering with us
 MASTER_REG_REPLY   = 0x91   # SEND — our response to registration
 PEER_LIST_REQ      = 0x92   # PROCESS — repeater requesting peer list
@@ -25,9 +25,12 @@ PEER_ALIVE_REQ     = 0x98   # Ignore — peer-to-peer keepalive request
 PEER_ALIVE_REPLY   = 0x99   # Ignore — peer-to-peer keepalive reply
 DE_REG_REQ         = 0x9A   # PROCESS — repeater deregistering
 DE_REG_REPLY       = 0x9B   # SEND — our deregister acknowledgement
-SYSTEM_MAP_REQ     = 0x9C   # Ignore — system topology query (purpose not fully known)
+SYSTEM_MAP_REQ     = 0x9C   # Ignore — system topology query; distinct from peer list (0x92/0x93); purpose not fully known
 SYSTEM_MAP_REPLY   = 0x9D   # Ignore — system topology reply
 UNKNOWN_9E         = 0x9E   # Ignore — possibly extended peer registration; purpose unknown
+WIRELINE           = 0xB2   # Ignore — MNIS (Mobile Network Interface Service) data sub-protocol
+REMOTE_PROG_REQ    = 0xE0   # Ignore — CPS remote programming session request (TCP port redirect)
+REMOTE_PROG_REPLY  = 0xE1   # Ignore — CPS remote programming session reply
 
 # ---------------------------------------------------------------------------
 # Observed-but-unidentified opcodes

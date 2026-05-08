@@ -40,10 +40,11 @@ GV_PAYLOAD_OFF    = 31
 GV_LC_OFF         = 38   # LC word start in HEAD/TERM 54-byte packet
 
 OPCODES = {
-    0x70: 'XCMP_XNL',         0x80: 'GROUP_VOICE',
-    0x81: 'PVT_VOICE',        0x83: 'GROUP_DATA',
-    0x84: 'PVT_DATA',         0x85: 'RPT_WAKE_UP',
-    0x86: 'UNKNOWN_COLLISION',   # DMRlink; node-dmr-lib: CALL_INTERRUPT_REQ
+    0x61: 'CALL_MON_STATUS',  0x62: 'CALL_MON_RPT',
+    0x63: 'REPEATER_BLOCKED', 0x70: 'XCMP_XNL',
+    0x80: 'GROUP_VOICE',      0x81: 'PVT_VOICE',
+    0x83: 'GROUP_DATA',       0x84: 'PVT_DATA',
+    0x85: 'RPT_WAKE_UP',      0x86: 'CALL_INTERRUPT_REQ',
     0x90: 'MASTER_REG_REQ',   0x91: 'MASTER_REG_REPLY',
     0x92: 'PEER_LIST_REQ',    0x93: 'PEER_LIST_REPLY',
     0x94: 'PEER_REG_REQ',     0x95: 'PEER_REG_REPLY',
@@ -51,7 +52,7 @@ OPCODES = {
     0x98: 'PEER_ALIVE_REQ',   0x99: 'PEER_ALIVE_REPLY',
     0x9A: 'DE_REG_REQ',       0x9B: 'DE_REG_REPLY',
     0x9C: 'SYSTEM_MAP_REQ',   0x9D: 'SYSTEM_MAP_REPLY',
-    0x9E: 'UNKNOWN_9E',
+    0x9E: 'UNKNOWN_9E',       0xB2: 'WIRELINE',
     0xE0: 'REMOTE_PROG_REQ',  0xE1: 'REMOTE_PROG_REPLY',
     0xF0: '0xF0(observed/benign)',
 }

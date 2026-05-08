@@ -25,7 +25,7 @@ from ipsc.const import (
     MASTER_ALIVE_REQ, MASTER_ALIVE_REPLY,
     DE_REG_REQ, DE_REG_REPLY, OPCODE_0xF0,
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
-    UNKNOWN_COLLISION, XCMP_XNL,
+    REPEATER_BLOCKED, CALL_INTERRUPT_REQ, XCMP_XNL,
     VOICE_HEAD, VOICE_TERM,
     TS_CALL_MSK,
     GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF,
@@ -40,11 +40,11 @@ _wire = logging.getLogger('ipsc.wire')   # enable with --wire; logs raw hex only
 _KNOWN_UNHANDLED = {
     0x05: 'CALL_CONFIRMATION',   # confirmed-call acknowledgement from recipient
     0x54: 'TXT_MESSAGE_ACK',     # text message ack (sent on success OR failure)
-    0x61: 'CALL_MON_STATUS',     # DMRlink name; node-dmr-lib calls this REPEATER_CALL_TRANSMISSION
-    0x62: 'CALL_MON_RPT',        # DMRlink name; node-dmr-lib calls this REPEATER_CALL_CONTROL
-    0x63: 'CALL_MON_NACK',       # DMRlink name; node-dmr-lib calls this REPEATER_BLOCK
+    0x61: 'CALL_MON_STATUS',     # Motorola call monitor: call event notification
+    0x62: 'CALL_MON_RPT',        # Motorola call monitor: per-slot state report
+    0x63: 'REPEATER_BLOCKED',    # signal interference / BSI blocking event
     0x85: 'RPT_WAKE_UP',         # repeater wake-up: seq(4)+slots(1)+type(1)
-    0x86: 'UNKNOWN_COLLISION',   # DMRlink name; node-dmr-lib calls this CALL_INTERRUPT_REQ
+    0x86: 'CALL_INTERRUPT_REQ',  # call interrupt request
     0x91: 'MASTER_REG_REPLY',    # peer→master registration reply (we are master, not peer)
     0x93: 'PEER_LIST_REPLY',     # peer list reply (we are master, not peer)
     0x94: 'PEER_REG_REQ',        # peer-to-peer registration request
@@ -53,9 +53,12 @@ _KNOWN_UNHANDLED = {
     0x98: 'PEER_ALIVE_REQ',      # peer keepalive request
     0x99: 'PEER_ALIVE_REPLY',    # peer keepalive reply
     0x9B: 'DE_REG_REPLY',        # de-registration reply (we are master, not peer)
-    0x9C: 'SYSTEM_MAP_REQ',      # system topology query; purpose not fully known
+    0x9C: 'SYSTEM_MAP_REQ',      # system topology query; distinct from peer list; purpose not fully known
     0x9D: 'SYSTEM_MAP_REPLY',    # system topology reply
     0x9E: 'UNKNOWN_9E',          # possibly extended peer registration; unknown
+    0xB2: 'WIRELINE',            # MNIS data sub-protocol
+    0xE0: 'REMOTE_PROG_REQ',     # CPS remote programming session request
+    0xE1: 'REMOTE_PROG_REPLY',   # CPS remote programming session reply
 }
 
 # IPSC supports 15 peers maximum; master counts as one, so 14 non-master peers.
@@ -145,8 +148,10 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             log.debug('PVT_VOICE from %s:%d — ignored', host, port)
         elif opcode in (GROUP_DATA, PVT_DATA):
             log.debug('Data packet 0x%02x from %s:%d — ignored', opcode, host, port)
-        elif opcode == UNKNOWN_COLLISION:
-            log.debug('UNKNOWN_COLLISION from %s:%d', host, port)
+        elif opcode == REPEATER_BLOCKED:
+            log.debug('REPEATER_BLOCKED from %s:%d', host, port)
+        elif opcode == CALL_INTERRUPT_REQ:
+            log.debug('CALL_INTERRUPT_REQ from %s:%d', host, port)
         elif opcode == OPCODE_0xF0:
             log.debug('0xF0 from %s:%d — observed, benign, no response sent', host, port)
         elif opcode in _KNOWN_UNHANDLED:

@@ -163,9 +163,30 @@ Sent between peers (not to/from master) once CONNECTED state is established.  Ma
 
 ---
 
+### RPT_WAKE_UP (0x85) — received from peer, not processed
+
+Repeater wake-up broadcast — sent to bring a sleeping or inactive repeater back online.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x85 |
+| 1 | 4 | Peer Radio ID | sender's radio ID |
+| 5 | 4 | Sequence | wake-up sequence number |
+| 9 | 1 | Slots | timeslot bitmask |
+| 10 | 1 | Wake-up Type | purpose not fully documented |
+| [11] | 10 | Auth digest | if auth enabled |
+
+**Total:** 11 bytes (+ 10 if auth).  Observed examples: `8500000002 00000001 00 01` and `8500000002 00000001 01 01`.
+
+---
+
 ### SYSTEM_MAP_REQ (0x9C) / SYSTEM_MAP_REPLY (0x9D)
 
-System topology query/reply.  Purpose not fully documented.  No handler; log and ignore.
+System topology query/reply at the IPSC level.  **Not the same as the peer list (0x92/0x93)** — the peer list covers IPSC peers for full-mesh UDP communication; the system map likely covers broader topology (possibly multi-site or system-wide).  No payload structure is known — node-dmr-lib defines the opcodes as constants only with no implementation.
+
+Note: the XNL layer (inside 0x70 packets) has its own `DEVICE_SYS_MAP_REQUEST/REPLY` (XNL opcodes 0x08/0x09) which returns a list of XNL-connected devices (type, device number, XNL address, auth index) — that is a separate and distinct map.
+
+No handler; log and ignore.
 
 ---
 
@@ -194,6 +215,70 @@ Observed example bytes: `e000000097000000970000001400000000c3500000010000`
 Reply example: `e100000014000000140000009704` — appears to carry target ID, initiator ID, and a result code.
 
 **Note:** ipsc2hbp does not currently send 0xE0.  This is likely why remote programming via ipsc2hbp fails — the programming software registers successfully but never receives the TCP redirect it needs to begin the session.
+
+---
+
+### CALL_MON_STATUS (0x61) — received from peer, not processed
+
+Motorola "call monitor" feature — the repeater sends call event notifications to the master describing calls it is handling.  We receive but do not process these.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x61 |
+| 1 | 4 | Peer Radio ID | sender's radio ID (standard header) |
+| 5 | 4 | Source Peer ID | radio ID of the peer originating the call (may repeat header ID) |
+| 9 | 4 | Call Sequence | call sequence number |
+| 13 | 1 | Slot | timeslot (channel number) |
+| 14 | 2 | Call Status | see status values below |
+| 16 | 3 | Source Radio ID | originating subscriber ID |
+| 19 | 3 | Destination ID | destination group or subscriber ID |
+| 22 | 1 | Call Type | see call type values below |
+| 23 | 1 | Call Priority | call priority level |
+| 24 | 1 | Security Type | `0x00`=clear; `0x01`=basic; `0x02`=enhanced |
+| 25 | 1 | MF ID | `0x00`=standard; `0x01`=reserved; `0x10`=Motorola proprietary |
+| [26] | 2 | Unknown | optional; present when total body is 26 bytes |
+| [28] | 2 | RSSI | optional RSSI value; present when total body is 26 bytes |
+
+**Total:** 26 bytes (standard) or 31 bytes (with RSSI) + 10 if auth.
+
+**Call Status values:** `1`=started successfully, `2`=ended successfully, `3`=race condition failure, `4`=invalid/prohibited, `5`=destination slot busy, `6`=subscriber busy, `7`=all channels busy, `8`=OTA repeat disabled, `9`=signal interference, `10`=CWID in progress, `11`=TOT expiry, `12`=TX interrupted, `13`=higher priority takeover, `14`=other unknown failure.
+
+**Call Type values (partial):** `48–52`=CSBK preambles, `64–65`=emergency CSBK alarm, `66`=emergency voice, `67–68`=private call req/resp, `69–70`=call alert req/resp, `71–74`=radio check/inhibit req/resp, `77–78`=radio monitor req/resp, `79`=group voice, `80`=private voice, `81`=group data, `82`=private data, `83`=all call, `90–92`=phone calls.
+
+---
+
+### CALL_MON_RPT (0x62) — received from peer, not processed
+
+Motorola "call monitor" feature — the repeater reports the current state of each timeslot to the master.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x62 |
+| 1 | 4 | Peer Radio ID | sender's radio ID |
+| 5 | 1 | Slot 1 State | see state values below |
+| 6 | 1 | Slot 2 State | see state values below |
+| [7] | 10 | Auth digest | if auth enabled |
+
+**Total:** 7 bytes (+ 10 if auth).
+
+**Slot State values:** `1`=ACTIVE, `2`=IDLE, `3`=SLOT_DISABLED, `4`=SLOT_REENABLED, `0xFF`=UNKNOWN.
+
+---
+
+### REPEATER_BLOCKED (0x63) — received from peer, not processed
+
+Signal interference and BSI (back-site interference) blocking event notification — the repeater reports start/end of interference conditions.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x63 |
+| 1 | 4 | Peer Radio ID | sender's radio ID |
+| 5 | 1 | Status | see status values below |
+| [6] | 10 | Auth digest | if auth enabled |
+
+**Total:** 6 bytes (+ 10 if auth).
+
+**Status values:** `1`=SIGNAL_INTERFERENCE1_START, `2`=SIGNAL_INTERFERENCE1_END, `3`=SIGNAL_INTERFERENCE2_START, `4`=SIGNAL_INTERFERENCE2_END, `5`=BSI_REPEAT_START, `6`=BSI_REPEAT_END, `0xFF`=UNKNOWN.
 
 ---
 
