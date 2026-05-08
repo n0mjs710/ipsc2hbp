@@ -43,6 +43,58 @@ auth_key = ""
 # Minimum: 5.  Recommended: 60.
 keepalive_watchdog = 60
 
+# ---------------------------------------------------------------------------
+# IPSC capability advertisement
+#
+# WARNING: These fields control what ipsc2hbp tells IPSC peers about its
+# capabilities during registration and keepalive.  Advertising capabilities
+# that are not actually supported can confuse repeaters or cause unexpected
+# behaviour.  The safe defaults have been verified against real hardware.
+#
+# use_safe_defaults = true  →  all settings below are ignored; ipsc2hbp
+#   uses proven working values identical to its original behaviour.
+#
+# use_safe_defaults = false →  ipsc2hbp advertises exactly what you
+#   configure below.  Only change this if you have a specific reason and
+#   a wire capture to verify the result.
+# ---------------------------------------------------------------------------
+[ipsc.capabilities]
+use_safe_defaults = true
+
+# Radio mode advertised to IPSC peers.
+# "DIGITAL"  — digital repeater (default; correct for a standard MOTOTRBO system)
+# "ANALOG"   — analog repeater
+# "NO_RADIO" — no radio / software application (e.g. a console or programming tool)
+# radio_mode = "DIGITAL"
+
+# Whether each timeslot is advertised as linked.
+# Peers use this to decide whether to attempt calls on each slot.
+# ts1_linked = true
+# ts2_linked = true
+
+# Service flags — what capabilities this system advertises.
+# csbk    = false   # CSBK (control signalling) support
+# rpt_mon = false   # Repeater call monitoring
+# con_app = false   # 3rd-party console application (Motorola CPS / programming tool)
+# xnl_con    = false   # XNL/XCMP connected (Motorola proprietary control protocol)
+# xnl_master = false   # XNL master device
+# xnl_slave  = false   # XNL slave device
+# data  = false   # Data calls supported
+# voice = true    # Voice calls supported
+
+# IPSC version field (8 hex characters = 4 bytes).
+# Sent in all registration and keepalive packets.
+# DMRlink default: "04020401" (LINK_TYPE_IPSC + VER17 + LINK_TYPE_IPSC + VER16).
+# Full semantics not fully understood — being determined empirically.
+# ipsc_version = "04020401"
+
+# Unknown FLAGS bytes 0 and 1.
+# Purpose is undocumented.  Observed as "00" from standard MOTOTRBO repeaters.
+# One programming application has been observed sending "01" in byte 1.
+# Only change these if you have specific evidence from a wire capture.
+# flags_unknown_byte0 = "00"
+# flags_unknown_byte1 = "00"
+
 [hbp]
 # Upstream HBP master to connect to (BrandMeister, DMR+, FreeDMR, HBlink4).
 master_ip   = "127.0.0.1"

@@ -27,8 +27,7 @@ from ipsc.const import (
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
     UNKNOWN_COLLISION, XCMP_XNL,
     VOICE_HEAD, VOICE_TERM,
-    IPSC_VER, TS_CALL_MSK,
-    VOICE_CALL_MSK, PKT_AUTH_MSK, MSTR_PEER_MSK,
+    TS_CALL_MSK,
     GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF,
     GV_MIN_LEN, AUTH_DIGEST_LEN,
 )
@@ -55,9 +54,6 @@ _KNOWN_UNHANDLED = {
     0x9B: 'DE_REG_REPLY',        # de-registration reply (we are master, not peer)
 }
 
-# Our MODE byte: operational (0x40) + digital (0x20) + TS1 on (0x08) + TS2 on (0x02)
-_OUR_MODE = b'\x6A'
-
 # IPSC supports 15 peers maximum; master counts as one, so 14 non-master peers.
 _MAX_PEERS = 14
 
@@ -77,15 +73,11 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         # Precompute constant fields
         self._master_id = config.ipsc_master_id.to_bytes(4, 'big')
 
-        flags_byte4 = VOICE_CALL_MSK | MSTR_PEER_MSK
-        if config.auth_enabled:
-            flags_byte4 |= PKT_AUTH_MSK
-        self._our_flags = b'\x00\x00\x00' + bytes([flags_byte4])
-        self._ts_flags  = _OUR_MODE + self._our_flags  # 5 bytes
+        self._ts_flags  = config.ipsc_mode_byte + config.ipsc_flags_bytes  # 5 bytes
 
         # Static reply packets (master_id constant; peer_count inserted dynamically)
         self._alive_reply = (
-            bytes([MASTER_ALIVE_REPLY]) + self._master_id + self._ts_flags + IPSC_VER
+            bytes([MASTER_ALIVE_REPLY]) + self._master_id + self._ts_flags + config.ipsc_version
         )
         self._dereg_reply = bytes([DE_REG_REPLY]) + self._master_id
 
@@ -220,7 +212,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
             + self._master_id
             + self._ts_flags
             + struct.pack('>H', len(self._peers))
-            + IPSC_VER
+            + self._cfg.ipsc_version
         )
         self._send(reg_reply, host, port)
         self._send_peer_list(host, port)

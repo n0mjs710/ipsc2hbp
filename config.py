@@ -24,6 +24,11 @@ class Config:
     auth_key: bytes               # 20 bytes, zero-padded from hex config value
     keepalive_watchdog: int
 
+    # [ipsc.capabilities] — wire-format bytes computed by config loader
+    ipsc_mode_byte:   bytes   # 1 byte  — MODE field in all IPSC management packets
+    ipsc_flags_bytes: bytes   # 4 bytes — FLAGS field in all IPSC management packets
+    ipsc_version:     bytes   # 4 bytes — IPSC version field
+
     # [hbp]
     hbp_master_ip: str
     hbp_master_port: int
@@ -154,6 +159,105 @@ def load(path: str) -> Config:
             except ValueError as exc:
                 errors.append(f'[ipsc] auth_key: not valid hex: {exc}')
 
+    # [ipsc.capabilities]
+    cap = raw.get('ipsc', {}).get('capabilities', {})
+    use_safe_defaults = cap.get('use_safe_defaults', True)
+    if not isinstance(use_safe_defaults, bool):
+        errors.append('[ipsc.capabilities] use_safe_defaults: must be true or false')
+        use_safe_defaults = True
+
+    if use_safe_defaults:
+        # Proven working values — do not change without a wire capture to verify.
+        ipsc_mode_byte   = b'\x6A'            # OP + DIGITAL + TS1:on + TS2:on
+        _flags_b4 = 0x05                      # VOICE_CALL | MSTR_PEER
+        if auth_enabled:
+            _flags_b4 |= 0x10                 # PKT_AUTH
+        ipsc_flags_bytes = b'\x00\x00\x00' + bytes([_flags_b4])
+        ipsc_version     = b'\x04\x02\x04\x01'
+    else:
+        # --- MODE byte ---
+        # Operational bit-pair (bits 7-6): only 0b01 is known valid.
+        op_bits = 0b01
+
+        raw_radio_mode = cap.get('radio_mode', 'DIGITAL')
+        if not isinstance(raw_radio_mode, str):
+            errors.append('[ipsc.capabilities] radio_mode: must be a string')
+            raw_radio_mode = 'DIGITAL'
+        raw_radio_mode = raw_radio_mode.strip().upper()
+        mode_bits = {'DIGITAL': 0b10, 'ANALOG': 0b01, 'NO_RADIO': 0b00}.get(raw_radio_mode)
+        if mode_bits is None:
+            errors.append('[ipsc.capabilities] radio_mode: must be DIGITAL, ANALOG, or NO_RADIO')
+            mode_bits = 0b10
+
+        ts1 = cap.get('ts1_linked', True)
+        ts2 = cap.get('ts2_linked', True)
+        if not isinstance(ts1, bool):
+            errors.append('[ipsc.capabilities] ts1_linked: must be true or false')
+            ts1 = True
+        if not isinstance(ts2, bool):
+            errors.append('[ipsc.capabilities] ts2_linked: must be true or false')
+            ts2 = True
+        ts1_bits = 0b10 if ts1 else 0b01
+        ts2_bits = 0b10 if ts2 else 0b01
+
+        mode_val = (op_bits << 6) | (mode_bits << 4) | (ts1_bits << 2) | ts2_bits
+        ipsc_mode_byte = bytes([mode_val])
+
+        # --- FLAGS bytes ---
+        def _cap_bool(key, default=False):
+            v = cap.get(key, default)
+            if not isinstance(v, bool):
+                errors.append(f'[ipsc.capabilities] {key}: must be true or false')
+                return default
+            return v
+
+        def _cap_hex_byte(key, default=0):
+            v = cap.get(key, f'{default:02x}')
+            if not isinstance(v, str):
+                errors.append(f'[ipsc.capabilities] {key}: must be a 2-character hex string')
+                return default
+            try:
+                val = int(v.strip(), 16)
+                if not 0 <= val <= 255:
+                    raise ValueError
+                return val
+            except ValueError:
+                errors.append(f'[ipsc.capabilities] {key}: must be a 2-character hex string (e.g. "00")')
+                return default
+
+        b0 = _cap_hex_byte('flags_unknown_byte0')
+        b1 = _cap_hex_byte('flags_unknown_byte1')
+
+        b2 = 0x00
+        if _cap_bool('csbk'):    b2 |= 0x80
+        if _cap_bool('rpt_mon'): b2 |= 0x40
+        if _cap_bool('con_app'): b2 |= 0x20
+
+        b3 = 0x01                             # MSTR_PEER always set — we are always master
+        if _cap_bool('xnl_con'):    b3 |= 0x80
+        if _cap_bool('xnl_master'): b3 |= 0x40
+        if _cap_bool('xnl_slave'):  b3 |= 0x20
+        if auth_enabled:            b3 |= 0x10  # AUTH always mirrors auth_enabled
+        if _cap_bool('data'):       b3 |= 0x08
+        if _cap_bool('voice', default=True): b3 |= 0x04
+
+        ipsc_flags_bytes = bytes([b0, b1, b2, b3])
+
+        # --- IPSC version ---
+        raw_ver = cap.get('ipsc_version', '04020401')
+        if not isinstance(raw_ver, str):
+            errors.append('[ipsc.capabilities] ipsc_version: must be an 8-character hex string')
+            raw_ver = '04020401'
+        raw_ver = raw_ver.strip().replace(' ', '')
+        if len(raw_ver) != 8:
+            errors.append('[ipsc.capabilities] ipsc_version: must be exactly 8 hex characters (4 bytes)')
+            raw_ver = '04020401'
+        try:
+            ipsc_version = bytes.fromhex(raw_ver)
+        except ValueError:
+            errors.append('[ipsc.capabilities] ipsc_version: not valid hex')
+            ipsc_version = b'\x04\x02\x04\x01'
+
     # [hbp]
     hbp_master_ip   = get_str('hbp', 'master_ip')
     hbp_master_port = get_int('hbp', 'master_port', min_val=1, max_val=65535)
@@ -192,6 +296,9 @@ def load(path: str) -> Config:
         auth_enabled=auth_enabled,
         auth_key=auth_key,
         keepalive_watchdog=keepalive_watchdog,
+        ipsc_mode_byte=ipsc_mode_byte,
+        ipsc_flags_bytes=ipsc_flags_bytes,
+        ipsc_version=ipsc_version,
         hbp_master_ip=hbp_master_ip,
         hbp_master_port=hbp_master_port,
         hbp_repeater_id=hbp_repeater_id,
