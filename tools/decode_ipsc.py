@@ -84,8 +84,9 @@ VOICE_CALL_MSK= 0b00000100
 MSTR_PEER_MSK = 0b00000001
 
 def _fmt_ver(raw: bytes) -> str:
-    """Format 4-byte IPSC version as decimal tuple: '4.2.4.1'."""
-    return '.'.join(str(b) for b in raw)
+    """Format 4-byte IPSC version as decimal integer + hex: '67043329 (0x04020401)'."""
+    val = int.from_bytes(raw, 'big')
+    return f'{val} (0x{raw.hex()})'
 
 def _yn(val) -> str:
     return 'yes' if val else 'no'
