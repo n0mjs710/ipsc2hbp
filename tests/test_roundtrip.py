@@ -59,7 +59,7 @@ class _MockHBP:
 
 
 def parse_wire(path):
-    pattern = re.compile(r'RECV \d+ ([0-9a-f]+)')
+    pattern = re.compile(r'RECV \S+ \d+ ([0-9a-f]+)')
     packets = []
     with open(path) as f:
         for line in f:

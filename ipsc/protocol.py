@@ -118,7 +118,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
         if not data:
             return
 
-        _wire.debug('IPSC RECV %d %s', len(data), data.hex())
+        _wire.debug('IPSC RECV %s %d %s', host, len(data), data.hex())
 
         opcode = data[0]
 
@@ -344,7 +344,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
     def _send(self, packet: bytes, host: str, port: int):
         out = packet + self._auth_suffix(packet)
-        _wire.debug('IPSC SEND %d %s', len(packet), packet.hex())
+        _wire.debug('IPSC SEND %s %d %s', host, len(packet), packet.hex())
         self._transport.sendto(out, (host, port))
 
     # ------------------------------------------------------------------

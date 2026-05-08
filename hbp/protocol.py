@@ -109,7 +109,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr):
         if len(data) < 4:
             return
-        _wire.debug('HBP RECV %d %s', len(data), data.hex())
+        _wire.debug('HBP RECV %s %d %s', addr[0], len(data), data.hex())
         cmd4 = data[:4]
 
         # Dispatch by longest-match prefix
@@ -210,12 +210,12 @@ class _HBPProtocol(asyncio.DatagramProtocol):
 
     def _send_raw(self, data: bytes):
         if self._transport:
-            _wire.debug('HBP SEND %d %s', len(data), data.hex())
+            _wire.debug('HBP SEND %s %d %s', self._cfg.hbp_master_ip, len(data), data.hex())
             self._transport.sendto(data)
 
     def send_dmrd(self, data: bytes):
         if self._state == 'CONNECTED' and self._transport:
-            _wire.debug('HBP SEND %d %s', len(data), data.hex())
+            _wire.debug('HBP SEND %s %d %s', self._cfg.hbp_master_ip, len(data), data.hex())
             self._transport.sendto(data)
 
     def is_connected(self) -> bool:

@@ -542,7 +542,7 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 
 **Destination**: stderr only. systemd captures stderr into journald automatically.
 
-**Wire mode** (`--wire` CLI flag): silences all normal logging and instead emits one line per raw IPSC packet — `SEND N hex` or `RECV N hex`. Use this to capture a live call to a file (`python ipsc2hbp.py --wire 2>wire.txt`) and replay through `tests/test_roundtrip.py` to verify AMBE round-trip integrity.
+**Wire mode** (`--wire` CLI flag): silences all normal logging and instead emits one line per packet — `IPSC RECV ip len hex`, `IPSC SEND ip len hex`, `HBP RECV ip len hex`, `HBP SEND ip len hex`. The source/destination IP is included so traffic from a specific peer can be isolated with grep. Use this to capture a live call to a file (`python ipsc2hbp.py --wire 2>wire.txt`) and replay through `tests/test_roundtrip.py` to verify AMBE round-trip integrity.
 
 **Format**: `%(asctime)s %(levelname)s [%(name)s] %(message)s`
 
