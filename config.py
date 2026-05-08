@@ -184,9 +184,9 @@ def load(path: str) -> Config:
             errors.append('[ipsc.capabilities] radio_mode: must be a string')
             raw_radio_mode = 'DIGITAL'
         raw_radio_mode = raw_radio_mode.strip().upper()
-        mode_bits = {'DIGITAL': 0b10, 'ANALOG': 0b01, 'NO_RADIO': 0b00}.get(raw_radio_mode)
+        mode_bits = {'DIGITAL': 0b10, 'ANALOG': 0b01, 'NO_RADIO': 0b00, 'MIXED': 0b11}.get(raw_radio_mode)
         if mode_bits is None:
-            errors.append('[ipsc.capabilities] radio_mode: must be DIGITAL, ANALOG, or NO_RADIO')
+            errors.append('[ipsc.capabilities] radio_mode: must be DIGITAL, ANALOG, NO_RADIO, or MIXED')
             mode_bits = 0b10
 
         ts1 = cap.get('ts1_linked', True)
@@ -225,8 +225,20 @@ def load(path: str) -> Config:
                 errors.append(f'[ipsc.capabilities] {key}: must be a 2-character hex string (e.g. "00")')
                 return default
 
-        b0 = _cap_hex_byte('flags_unknown_byte0')
-        b1 = _cap_hex_byte('flags_unknown_byte1')
+        # FLAGS byte 0 — wireline/MNIS capability bits; safely zero for non-MNIS devices
+        b0 = 0x00
+        if _cap_bool('slot2_wireline'): b0 |= 0x10
+        if _cap_bool('slot1_wireline'): b0 |= 0x08
+        if _cap_bool('wireline_svc'):   b0 |= 0x04
+
+        # FLAGS byte 1 — service/capability bits; safely zero for a standard repeater
+        b1 = 0x00
+        if _cap_bool('mnis'):         b1 |= 0x80
+        if _cap_bool('ip_site_freq'): b1 |= 0x40
+        if _cap_bool('slot2_phone'):  b1 |= 0x10
+        if _cap_bool('slot1_phone'):  b1 |= 0x08
+        if _cap_bool('virtual_peer'): b1 |= 0x04
+        if _cap_bool('cps_avail'):    b1 |= 0x02
 
         b2 = 0x00
         if _cap_bool('csbk'):    b2 |= 0x80

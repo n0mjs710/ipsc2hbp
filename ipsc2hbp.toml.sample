@@ -65,35 +65,51 @@ use_safe_defaults = true
 # "DIGITAL"  — digital repeater (default; correct for a standard MOTOTRBO system)
 # "ANALOG"   — analog repeater
 # "NO_RADIO" — no radio / software application (e.g. a console or programming tool)
+# "MIXED"    — site handles both analog and digital (rare)
 # radio_mode = "DIGITAL"
 
-# Whether each timeslot is advertised as linked.
+# Whether each timeslot is advertised as IPSC-linked.
 # Peers use this to decide whether to attempt calls on each slot.
 # ts1_linked = true
 # ts2_linked = true
 
-# Service flags — what capabilities this system advertises.
+# FLAGS byte 2 — application capability flags.
 # csbk    = false   # CSBK (control signalling) support
 # rpt_mon = false   # Repeater call monitoring
 # con_app = false   # 3rd-party console application (Motorola CPS / programming tool)
+
+# FLAGS byte 3 — XNL/XCMP and call flags (AUTH and MASTER are always set automatically).
 # xnl_con    = false   # XNL/XCMP connected (Motorola proprietary control protocol)
 # xnl_master = false   # XNL master device
 # xnl_slave  = false   # XNL slave device
 # data  = false   # Data calls supported
 # voice = true    # Voice calls supported
 
-# IPSC version field (8 hex characters = 4 bytes).
-# Sent in all registration and keepalive packets.
-# DMRlink default: "04020401" (LINK_TYPE_IPSC + VER17 + LINK_TYPE_IPSC + VER16).
-# Full semantics not fully understood — being determined empirically.
-# ipsc_version = "04020401"
+# FLAGS byte 1 — service/capability flags.
+# All default false — only set these if you have a specific reason and a wire capture
+# to verify the effect.  Leave false for a standard repeater or bridge application.
+# mnis         = false   # MNIS (Mobile Network Interface Service) capable
+# ip_site_freq = false   # IP Site Single Frequency
+# slot1_phone  = false   # TS1 phone patch capable
+# slot2_phone  = false   # TS2 phone patch capable
+# virtual_peer = false   # Software/virtual peer — signals this is not a physical repeater.
+#                        # May affect how programming software and console apps interact with us.
+# cps_avail    = false   # CPS Available / FirmwareNet
 
-# Unknown FLAGS bytes 0 and 1.
-# Purpose is undocumented.  Observed as "00" from standard MOTOTRBO repeaters.
-# One programming application has been observed sending "01" in byte 1.
-# Only change these if you have specific evidence from a wire capture.
-# flags_unknown_byte0 = "00"
-# flags_unknown_byte1 = "00"
+# FLAGS byte 0 — wireline/MNIS data service flags.
+# Only relevant for MNIS data service devices.  Leave all false for a standard
+# repeater or software application.
+# slot1_wireline = false   # TS1 wireline/MNIS capable
+# slot2_wireline = false   # TS2 wireline/MNIS capable
+# wireline_svc   = false   # Wireline data service active
+
+# IPSC version field (8 hex characters = 4 bytes).
+# Encodes two protocol type+version pairs: bytes 0-1 = main (type+version),
+# bytes 2-3 = backward-compatible (type+version).
+# Types: 0x01=IPSC, 0x02=CapacityPlus, 0x03=Application, 0x04=LinkedCapacityPlus
+# Default "04020401" = IPSC v2 main / IPSC v1 compat (from DMRlink).
+# Only change this if you have specific evidence from a wire capture.
+# ipsc_version = "04020401"
 
 [hbp]
 # Upstream HBP master to connect to (BrandMeister, DMR+, FreeDMR, HBlink4).
