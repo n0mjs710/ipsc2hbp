@@ -1,6 +1,6 @@
 # IPSC Packet Reference
 
-Derived from DMRlink source, wire captures, and code analysis.
+Derived from DMRlink source, wire captures, code analysis, and study of node-dmr-lib by rick51231 (https://github.com/rick51231/node-dmr-lib).
 Fields marked **[?]** are confirmed from wire captures but their purpose is not fully understood.
 
 All multi-byte integers are big-endian unless noted.

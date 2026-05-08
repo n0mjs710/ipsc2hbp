@@ -52,6 +52,8 @@ This work represents the author's interpretation of the Motorola MOTOTRBO IPSC p
 
 ***0x49 DE N0MJS***
 
+Additional IPSC packet structure knowledge — FLAGS byte field names, MODE byte slot states, IPSC version field encoding, call monitor payload layouts, remote programming opcodes, MNIS/Wireline identification, and more — was derived from study of **node-dmr-lib** by rick51231: https://github.com/rick51231/node-dmr-lib
+
 Copyright (C) 2026 Cortney T. Buffington, N0MJS <n0mjs@me.com>
 
 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.

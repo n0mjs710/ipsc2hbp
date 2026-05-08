@@ -127,14 +127,14 @@ All IPSC opcodes:
 | `0x54` | TXT_MESSAGE_ACK | DEBUG logged — received, not handled |
 | `0x61` | CALL_MON_STATUS | DEBUG logged — received, not handled |
 | `0x62` | CALL_MON_RPT | DEBUG logged — received, not handled |
-| `0x63` | CALL_MON_NACK | DEBUG logged — received, not handled |
+| `0x63` | REPEATER_BLOCKED | DEBUG logged — signal interference/BSI event, not handled |
 | `0x70` | XCMP_XNL | **NEVER process** — DEBUG logged only; these packets can damage repeater RF configuration |
 | `0x80` | GROUP_VOICE | Processed — primary payload |
 | `0x81` | PVT_VOICE | DEBUG logged — ignored |
 | `0x83` | GROUP_DATA | DEBUG logged — ignored |
 | `0x84` | PVT_DATA | DEBUG logged — ignored |
 | `0x85` | RPT_WAKE_UP | DEBUG logged — received, not handled |
-| `0x86` | UNKNOWN_COLLISION | DEBUG logged — ignored |
+| `0x86` | CALL_INTERRUPT_REQ | DEBUG logged — received, not handled |
 | `0x90` | MASTER_REG_REQ | Processed — registration |
 | `0x91` | MASTER_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
 | `0x92` | PEER_LIST_REQ | Processed — returns all registered peers |
@@ -147,6 +147,12 @@ All IPSC opcodes:
 | `0x99` | PEER_ALIVE_REPLY | DEBUG logged — received, not handled |
 | `0x9A` | DE_REG_REQ | Processed — deregistration |
 | `0x9B` | DE_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
+| `0x9C` | SYSTEM_MAP_REQ | DEBUG logged — system topology query, distinct from peer list; not handled |
+| `0x9D` | SYSTEM_MAP_REPLY | DEBUG logged — received, not handled |
+| `0x9E` | UNKNOWN_9E | DEBUG logged — possibly extended peer registration; not handled |
+| `0xB2` | WIRELINE | DEBUG logged — MNIS data sub-protocol; not handled |
+| `0xE0` | REMOTE_PROG_REQ | DEBUG logged — CPS remote programming session request; not handled |
+| `0xE1` | REMOTE_PROG_REPLY | DEBUG logged — CPS remote programming session reply; not handled |
 | `0xF0` | OPCODE_0xF0 | DEBUG logged — observed benign; appears post-keepalive in later firmware |
 | All others | — | WARNING logged with opcode and raw hex payload |
 
@@ -605,6 +611,8 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 The HomeBrew Repeater Protocol was developed by Jonathan Naylor G4KLX, Hans Barthen DL5DI, and Torsten Schultze DG1HT.
 
 The IPSC protocol is a reverse-engineered interpretation of the Motorola MOTOTRBO IPSC protocol used for amateur radio interoperability. Motorola and MOTOTRBO are registered trademarks of Motorola Solutions, Inc. This project is not affiliated with Motorola Solutions.
+
+Additional IPSC packet structure knowledge — FLAGS byte field names, MODE byte slot states, IPSC version field two-pair encoding, call monitor payload layouts, remote programming opcodes (0xE0/0xE1), MNIS/Wireline (0xB2) identification, system map opcode distinction, and more — was derived from study of **node-dmr-lib** by rick51231: https://github.com/rick51231/node-dmr-lib
 
 ---
 
