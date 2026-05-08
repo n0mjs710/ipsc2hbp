@@ -147,8 +147,8 @@ All IPSC opcodes:
 | `0x99` | PEER_ALIVE_REPLY | DEBUG logged — received, not handled |
 | `0x9A` | DE_REG_REQ | Processed — deregistration |
 | `0x9B` | DE_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
-| `0x9C` | SYSTEM_MAP_REQ | DEBUG logged — system topology query, distinct from peer list; not handled |
-| `0x9D` | SYSTEM_MAP_REPLY | DEBUG logged — received, not handled |
+| `0x9C` | SYSTEM_MAP_REQ | **Must implement** — CPS sends this after registration when peer list is non-empty; no reply causes CPS to hang; payload format unknown pending wire capture |
+| `0x9D` | SYSTEM_MAP_REPLY | **Must implement** — reply to 0x9C; also must be proactively pushed to CPS peers when repeater topology changes; payload format unknown |
 | `0x9E` | UNKNOWN_9E | DEBUG logged — possibly extended peer registration; not handled |
 | `0xB2` | WIRELINE | DEBUG logged — MNIS data sub-protocol; not handled |
 | `0xE0` | REMOTE_PROG_REQ | DEBUG logged — CPS remote programming session request; not handled |

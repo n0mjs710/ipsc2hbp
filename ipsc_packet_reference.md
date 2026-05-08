@@ -182,11 +182,21 @@ Repeater wake-up broadcast — sent to bring a sleeping or inactive repeater bac
 
 ### SYSTEM_MAP_REQ (0x9C) / SYSTEM_MAP_REPLY (0x9D)
 
-System topology query/reply at the IPSC level.  **Not the same as the peer list (0x92/0x93)** — the peer list covers IPSC peers for full-mesh UDP communication; the system map likely covers broader topology (possibly multi-site or system-wide).  No payload structure is known — node-dmr-lib defines the opcodes as constants only with no implementation.
+System topology query/reply at the IPSC level.  **Not the same as the peer list (0x92/0x93).**
 
-Note: the XNL layer (inside 0x70 packets) has its own `DEVICE_SYS_MAP_REQUEST/REPLY` (XNL opcodes 0x08/0x09) which returns a list of XNL-connected devices (type, device number, XNL address, auth index) — that is a separate and distinct map.
+**Confirmed behaviour (empirical, 2026-05-08):**
 
-No handler; log and ignore.
+- The CPS (programming software) sends SYSTEM_MAP_REQ (0x9C) to the IPSC master immediately after registration **if and only if** the peer list received at registration time is non-empty (i.e., at least one other peer is already registered).
+- When the peer list is empty at registration time, the CPS does not send 0x9C and completes the connection handshake without it.
+- If the master does not reply with 0x9D, the CPS hangs at the connection step and never completes registration.
+- Implementing 0x9D is required for CPS to connect to ipsc2hbp when any repeater is already registered.
+- By analogy with how 0x93 (PEER_LIST_REPLY) is proactively pushed to repeater peers when topology changes, 0x9D likely needs to be proactively pushed to CPS peers when a new repeater joins after they are already connected.  This is not yet confirmed empirically.
+
+**Payload format: unknown.**  node-dmr-lib defines 0x9C and 0x9D as bare opcode constants with no payload structure, no example bytes, and no commentary.  No wire captures of a genuine 0x9D have been obtained.  Do not speculate about the format until a capture is available.
+
+Note: the XNL layer (inside 0x70 packets) has its own `DEVICE_SYS_MAP_REQUEST/REPLY` (XNL opcodes 0x08/0x09) which returns a list of XNL-connected devices (type, device number, XNL address, auth index) — that is a separate and distinct map from 0x9C/0x9D.
+
+**Next step: implement 0x9C → 0x9D handler.**  Format must be determined from a wire capture before implementation.
 
 ---
 
