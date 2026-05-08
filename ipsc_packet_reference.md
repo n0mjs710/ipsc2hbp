@@ -134,6 +134,69 @@ and is typically set to keep UDP NAT translations alive through aggressive firew
 
 ---
 
+### PEER_REG_REQ (0x94) / PEER_REG_REPLY (0x95) — peer-to-peer registration
+
+Full-mesh handshake sent directly between peers (not to/from master).  After the master sends a PEER_LIST_REPLY, each peer sends PEER_REG_REQ to every other peer it learned about; peers reply with PEER_REG_REPLY to confirm CONNECTED state.  Only after this handshake completes does a peer consider another peer reachable and switch to PEER_ALIVE keepalives.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x94 (req) or 0x95 (reply) |
+| 1 | 4 | Peer Radio ID | sender's radio ID |
+| 5 | 4 | IPSC Version | sender's protocol version (see IPSC Version Field) |
+
+**Total:** 9 bytes (+ 10 if auth).  Example observed: `04070401` = IPSC v7 / IPSC v1.
+
+---
+
+### PEER_ALIVE_REQ (0x98) / PEER_ALIVE_REPLY (0x99) — peer-to-peer keepalive
+
+Sent between peers (not to/from master) once CONNECTED state is established.  Maintains UDP NAT translations across the full mesh.
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0x98 (req) or 0x99 (reply) |
+| 1 | 4 | Peer Radio ID | sender's radio ID |
+| 5 | 1 | Peer MODE | sender's MODE byte |
+| 6 | 4 | Peer FLAGS | sender's FLAGS word |
+
+**Total:** 10 bytes (+ 10 if auth).
+
+---
+
+### SYSTEM_MAP_REQ (0x9C) / SYSTEM_MAP_REPLY (0x9D)
+
+System topology query/reply.  Purpose not fully documented.  No handler; log and ignore.
+
+---
+
+### UNKNOWN_9E (0x9E)
+
+Possibly extended peer registration.  No implementation known.  No handler; log and ignore.
+
+---
+
+### REMOTE_PROGRAMMING_REQ (0xE0) / REMOTE_PROGRAMMING_REPLY (0xE1)
+
+CPS (Computer Programming Software) remote programming session initiation.  Sent by the IPSC master when a CON_APP peer registers, to redirect it to a TCP port for the actual programming exchange.
+
+Observed example bytes: `e000000097000000970000001400000000c3500000010000`
+
+| Offset | Len | Field | Value / Notes |
+|--------|-----|-------|---------------|
+| 0 | 1 | Opcode | 0xE0 |
+| 1 | 4 | Peer Radio ID (CPS) | programming software's radio ID |
+| 5 | 4 | CPS Radio ID | same as above (repeated?) |
+| 9 | 4 | Repeater Radio ID | target repeater's radio ID |
+| 13 | 4 | Unknown | observed as 0x00000000 |
+| 17 | 2 | TCP Port | port for programming session (e.g. 0xC350 = 50000) |
+| 19+ | — | Unknown | remaining fields unknown |
+
+Reply example: `e100000014000000140000009704` — appears to carry target ID, initiator ID, and a result code.
+
+**Note:** ipsc2hbp does not currently send 0xE0.  This is likely why remote programming via ipsc2hbp fails — the programming software registers successfully but never receives the TCP redirect it needs to begin the session.
+
+---
+
 ### OPCODE_0xF0 (0xF0) — received from peer, post-original-firmware
 
 | Offset | Len | Field | Value / Notes |
@@ -155,26 +218,48 @@ Documented from observation only; no assumption about intent is made.
 
 Present in MASTER_REG_REQ, MASTER_ALIVE_REQ, and both reply packets.
 
-DMRlink defines our value as **`0x04020401`**, decomposed as `LINK_TYPE_IPSC(0x04) + VER17(0x02) + LINK_TYPE_IPSC(0x04) + VER16(0x01)`.  The exact meaning of this decomposition is not fully understood.
+The 4 bytes encode **two protocol type+version pairs** — a main (current) protocol and a backward-compatible protocol:
 
-**Version negotiation:** IPSC devices are expected to advertise a version and negotiate down to the least common denominator for the system.  In practice, different device types (repeaters, programming software, console applications) have been observed to report different values.  Wire captures show the same device reporting different values in REG vs. ALIVE packets.  The full semantics — whether individual bytes encode link type, major/minor version, application type, or some combination — are not known and are being determined empirically.  The decode tool displays this field as four decimal bytes (e.g. `4.2.4.1`) to make byte-level differences visible across captures.
+| Bytes | Bits | Field | Notes |
+|-------|------|-------|-------|
+| 0–1 | [15:10] | Main protocol type | 6 bits |
+| 0–1 | [9:0] | Main protocol version | 10 bits |
+| 2–3 | [15:10] | Compat protocol type | 6 bits |
+| 2–3 | [9:0] | Compat protocol version | 10 bits |
+
+**Protocol type values:**
+
+| Value | Name |
+|-------|------|
+| 0x01 | IPSC |
+| 0x02 | CapacityPlus |
+| 0x03 | Application |
+| 0x04 | LinkedCapacityPlus |
+
+Our value **`0x04020401`** decodes as: IPSC v2 main / IPSC v1 compat.
+
+A peer registration example from node-dmr-lib (`0x04070401`) decodes as: IPSC v7 main / IPSC v1 compat — confirming the version numbers vary across device types and firmware.  Programming software and console applications likely advertise type 0x03 (Application).
+
+**Version negotiation:** Devices are expected to negotiate down to the least common denominator.  The full semantics — what version numbers actually gate — are still being determined empirically.  The decode tool displays this field in decoded form (e.g. `IPSC v2 / IPSC v1 (0x04020401)`) to make differences visible across captures.
 
 ---
 
 ## MODE Byte
 
-One byte encoding operational state and capability.  Our value: **0x6A** (operational + digital + TS1 on + TS2 on).
+One byte encoding operational state and capability.  Our value: **0x6A** (operational + digital + TS1 IPSC + TS2 IPSC).
 
-The byte uses **bit-pairs** for most fields, not individual bits:
+The byte uses **bit-pairs** for all fields:
 
 | Bits | Mask | Field | Values |
 |------|------|-------|--------|
-| 7–6 | 0xC0 | Operational | `01` = operational; `00` = not operational; other values undefined |
-| 5–4 | 0x30 | Radio mode | `00` = no radio / software app; `01` = analog; `10` = digital; `11` = unknown |
-| 3–2 | 0x0C | TS1 linked | `10` = on; `01` = off; `00`/`11` = undefined |
-| 1–0 | 0x03 | TS2 linked | `10` = on; `01` = off; `00`/`11` = undefined |
+| 7–6 | 0xC0 | Operational status | `01` = ENABLED (operational); `00` = DISABLED; `10` = KNOCKDOWN; `11` = LOCKED |
+| 5–4 | 0x30 | Radio mode / signaling | `00` = NO_RADIO (software app); `01` = ANALOG; `10` = DIGITAL; `11` = MIXED (analog+digital) |
+| 3–2 | 0x0C | TS1 state | `10` = IPSC (linked); `01` = LOCAL (not IPSC linked); `00` = DISABLED; `11` = RESERVED |
+| 1–0 | 0x03 | TS2 state | `10` = IPSC (linked); `01` = LOCAL (not IPSC linked); `00` = DISABLED; `11` = RESERVED |
 
-Software applications (programming tools, console apps) typically report `0x40`: operational, no radio, no timeslots.
+**Slot state distinctions:** DISABLED means the timeslot does not exist; LOCAL means the timeslot exists but is not linked to the IPSC system; IPSC means the timeslot is actively linked.
+
+Software applications (programming tools, console apps) typically report `0x40`: ENABLED, NO_RADIO, both slots DISABLED.
 
 ---
 
@@ -182,9 +267,26 @@ Software applications (programming tools, console apps) typically report `0x40`:
 
 Four bytes of capability flags.  Bytes 0–1 are **undocumented** — treat any non-zero value as significant and record it.  Bytes 2–3 carry known capability bits.
 
-**Byte 0 (offset 6 in packet):** Unknown.  Observed as `0x00` in all known captures from standard repeaters.
+**Byte 0 (offset 6 in packet):** Primarily wireline/MNIS-related.  Observed as `0x00` from standard repeaters; non-zero only on MNIS-capable data devices.
 
-**Byte 1 (offset 7 in packet):** Unknown.  Observed as `0x01` from at least one programming application; `0x00` from standard DMRlink peers.  Purpose not established.
+| Bit | Mask | Flag | Meaning |
+|-----|------|------|---------|
+| 4 | 0x10 | Slot2Wireline | TS2 wireline/MNIS capable |
+| 3 | 0x08 | Slot1Wireline | TS1 wireline/MNIS capable |
+| 2 | 0x04 | WirelineService | Wireline data service active |
+| 7–5, 1–0 | 0xE3 | — | Unknown; observed as zero |
+
+**Byte 1 (offset 7 in packet):** Service/capability flags.  Observed as `0x01` from at least one programming application; `0x00` from standard repeaters.  The `0x01` value sets bit 0, which is not yet named — may be related to CPS/firmware function.
+
+| Bit | Mask | Flag | Meaning |
+|-----|------|------|---------|
+| 7 | 0x80 | MNIS | Mobile Network Interface Service |
+| 6 | 0x40 | IPSiteFreq | IP Site Single Frequency |
+| 4 | 0x10 | Slot2Phone | TS2 phone patch capable |
+| 3 | 0x08 | Slot1Phone | TS1 phone patch capable |
+| 2 | 0x04 | VirtualPeer | Virtual peer (software application) |
+| 1 | 0x02 | CPSAvail | CPS Available / FirmwareNet |
+| 5, 0 | 0x21 | — | Unknown |
 
 **Byte 2 (offset 8 in packet):**
 

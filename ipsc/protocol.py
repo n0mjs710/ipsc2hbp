@@ -40,10 +40,11 @@ _wire = logging.getLogger('ipsc.wire')   # enable with --wire; logs raw hex only
 _KNOWN_UNHANDLED = {
     0x05: 'CALL_CONFIRMATION',   # confirmed-call acknowledgement from recipient
     0x54: 'TXT_MESSAGE_ACK',     # text message ack (sent on success OR failure)
-    0x61: 'CALL_MON_STATUS',     # call monitor — exact meaning unknown
-    0x62: 'CALL_MON_RPT',        # call monitor — exact meaning unknown
-    0x63: 'CALL_MON_NACK',       # call monitor — exact meaning unknown
-    0x85: 'RPT_WAKE_UP',         # similar to OTA DMR wake-up
+    0x61: 'CALL_MON_STATUS',     # DMRlink name; node-dmr-lib calls this REPEATER_CALL_TRANSMISSION
+    0x62: 'CALL_MON_RPT',        # DMRlink name; node-dmr-lib calls this REPEATER_CALL_CONTROL
+    0x63: 'CALL_MON_NACK',       # DMRlink name; node-dmr-lib calls this REPEATER_BLOCK
+    0x85: 'RPT_WAKE_UP',         # repeater wake-up: seq(4)+slots(1)+type(1)
+    0x86: 'UNKNOWN_COLLISION',   # DMRlink name; node-dmr-lib calls this CALL_INTERRUPT_REQ
     0x91: 'MASTER_REG_REPLY',    # peer→master registration reply (we are master, not peer)
     0x93: 'PEER_LIST_REPLY',     # peer list reply (we are master, not peer)
     0x94: 'PEER_REG_REQ',        # peer-to-peer registration request
@@ -52,6 +53,9 @@ _KNOWN_UNHANDLED = {
     0x98: 'PEER_ALIVE_REQ',      # peer keepalive request
     0x99: 'PEER_ALIVE_REPLY',    # peer keepalive reply
     0x9B: 'DE_REG_REPLY',        # de-registration reply (we are master, not peer)
+    0x9C: 'SYSTEM_MAP_REQ',      # system topology query; purpose not fully known
+    0x9D: 'SYSTEM_MAP_REPLY',    # system topology reply
+    0x9E: 'UNKNOWN_9E',          # possibly extended peer registration; unknown
 }
 
 # IPSC supports 15 peers maximum; master counts as one, so 14 non-master peers.

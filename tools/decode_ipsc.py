@@ -40,14 +40,19 @@ GV_PAYLOAD_OFF    = 31
 GV_LC_OFF         = 38   # LC word start in HEAD/TERM 54-byte packet
 
 OPCODES = {
-    0x70: 'XCMP_XNL',      0x80: 'GROUP_VOICE',
-    0x81: 'PVT_VOICE',     0x83: 'GROUP_DATA',
-    0x84: 'PVT_DATA',      0x85: 'RPT_WAKE_UP',
-    0x86: 'UNKNOWN_COLLISION',
-    0x90: 'MASTER_REG_REQ',  0x91: 'MASTER_REG_REPLY',
-    0x92: 'PEER_LIST_REQ',   0x93: 'PEER_LIST_REPLY',
-    0x96: 'MASTER_ALIVE_REQ',0x97: 'MASTER_ALIVE_REPLY',
-    0x9A: 'DE_REG_REQ',      0x9B: 'DE_REG_REPLY',
+    0x70: 'XCMP_XNL',         0x80: 'GROUP_VOICE',
+    0x81: 'PVT_VOICE',        0x83: 'GROUP_DATA',
+    0x84: 'PVT_DATA',         0x85: 'RPT_WAKE_UP',
+    0x86: 'UNKNOWN_COLLISION',   # DMRlink; node-dmr-lib: CALL_INTERRUPT_REQ
+    0x90: 'MASTER_REG_REQ',   0x91: 'MASTER_REG_REPLY',
+    0x92: 'PEER_LIST_REQ',    0x93: 'PEER_LIST_REPLY',
+    0x94: 'PEER_REG_REQ',     0x95: 'PEER_REG_REPLY',
+    0x96: 'MASTER_ALIVE_REQ', 0x97: 'MASTER_ALIVE_REPLY',
+    0x98: 'PEER_ALIVE_REQ',   0x99: 'PEER_ALIVE_REPLY',
+    0x9A: 'DE_REG_REQ',       0x9B: 'DE_REG_REPLY',
+    0x9C: 'SYSTEM_MAP_REQ',   0x9D: 'SYSTEM_MAP_REPLY',
+    0x9E: 'UNKNOWN_9E',
+    0xE0: 'REMOTE_PROG_REQ',  0xE1: 'REMOTE_PROG_REPLY',
     0xF0: '0xF0(observed/benign)',
 }
 
@@ -83,13 +88,28 @@ DATA_CALL_MSK = 0b00001000
 VOICE_CALL_MSK= 0b00000100
 MSTR_PEER_MSK = 0b00000001
 
+_PROTO_TYPES = {1: 'IPSC', 2: 'CapacityPlus', 3: 'Application', 4: 'LinkedCapacityPlus'}
+
+def _decode_proto_pair(b0: int, b1: int) -> str:
+    """Decode one 2-byte protocol type+version pair: high 6 bits = type, low 10 bits = version."""
+    word    = (b0 << 8) | b1
+    ptype   = (word >> 10) & 0x3F
+    pver    = word & 0x3FF
+    tname   = _PROTO_TYPES.get(ptype, f'type{ptype}')
+    return f'{tname} v{pver}'
+
 def _fmt_ver(raw: bytes) -> str:
-    """Format 4-byte IPSC version as decimal integer + hex: '67043329 (0x04020401)'."""
-    val = int.from_bytes(raw, 'big')
-    return f'{val} (0x{raw.hex()})'
+    """Format 4-byte IPSC version: decode two type+version pairs plus raw hex."""
+    if len(raw) < 4:
+        return f'(short) 0x{raw.hex()}'
+    main   = _decode_proto_pair(raw[0], raw[1])
+    compat = _decode_proto_pair(raw[2], raw[3])
+    return f'{main} / {compat} (0x{raw.hex()})'
 
 def _yn(val) -> str:
     return 'yes' if val else 'no'
+
+_SLOT_NAMES = {0b00: 'DISABLED', 0b01: 'LOCAL', 0b10: 'IPSC', 0b11: 'RESERVED'}
 
 def _print_mode(mode_byte: int, pfx: str = '         '):
     """Print full MODE byte decode — all fields explicit, unknown bits flagged."""
@@ -99,19 +119,15 @@ def _print_mode(mode_byte: int, pfx: str = '         '):
     ts2_bits = (mode_byte       & 0x03)
 
     op_str   = 'yes' if op_bits == 0b01 else f'NO  (raw bits={op_bits:02b} — expected 01)'
-    mode_str = {0b00: 'NO_RADIO', 0b01: 'ANALOG', 0b10: 'DIGITAL', 0b11: 'UNKNOWN'}[mm_bits]
-    ts1_str  = ('on'  if ts1_bits == 0b10 else
-                'off' if ts1_bits == 0b01 else
-                f'?   (raw bits={ts1_bits:02b} — expected 10=on or 01=off)')
-    ts2_str  = ('on'  if ts2_bits == 0b10 else
-                'off' if ts2_bits == 0b01 else
-                f'?   (raw bits={ts2_bits:02b} — expected 10=on or 01=off)')
+    mode_str = {0b00: 'NO_RADIO', 0b01: 'ANALOG', 0b10: 'DIGITAL', 0b11: 'MIXED'}[mm_bits]
+    ts1_str  = _SLOT_NAMES[ts1_bits]
+    ts2_str  = _SLOT_NAMES[ts2_bits]
 
     print(f'{pfx}MODE (0x{mode_byte:02x}):')
     print(f'{pfx}  operational: {op_str}')
     print(f'{pfx}  radio_mode:  {mode_str}')
-    print(f'{pfx}  TS1_linked:  {ts1_str}')
-    print(f'{pfx}  TS2_linked:  {ts2_str}')
+    print(f'{pfx}  TS1:         {ts1_str}')
+    print(f'{pfx}  TS2:         {ts2_str}')
 
 def _print_flags(flags: bytes, pfx: str = '         '):
     """
@@ -124,10 +140,6 @@ def _print_flags(flags: bytes, pfx: str = '         '):
 
     b0, b1, b2, b3 = flags[0], flags[1], flags[2], flags[3]
 
-    # bytes 0-1 are fully undocumented
-    b0_note = '  *** NON-ZERO — unknown field ***' if b0 else ''
-    b1_note = '  *** NON-ZERO — unknown field ***' if b1 else ''
-
     # byte 2: known bits 7-5; bits 4-0 undocumented
     b2_unknown = b2 & 0x1F
     b2_unk_note = f'  *** unknown bits 4-0 = 0x{b2_unknown:02x} ***' if b2_unknown else ''
@@ -136,9 +148,27 @@ def _print_flags(flags: bytes, pfx: str = '         '):
     b3_unknown = b3 & 0x02
     b3_unk_note = f'  *** unknown bit 1 set ***' if b3_unknown else ''
 
+    # byte 0: wireline-related bits (bits 4-2); bits 7-5 and 1-0 undocumented
+    b0_wl2    = _yn(b0 & 0x10)   # bit 4: Slot2Wireline
+    b0_wl1    = _yn(b0 & 0x08)   # bit 3: Slot1Wireline
+    b0_wlsvc  = _yn(b0 & 0x04)   # bit 2: WirelineService
+    b0_unk    = b0 & 0xE3        # bits 7-5 and 1-0 still unknown
+    b0_unk_note = f'  *** unknown bits = 0x{b0_unk:02x} ***' if b0_unk else ''
+
+    # byte 1: service/capability bits
+    b1_mnis    = _yn(b1 & 0x80)  # bit 7: MNIS
+    b1_ipsite  = _yn(b1 & 0x40)  # bit 6: IP Site Single Frequency
+    b1_sl2ph   = _yn(b1 & 0x10)  # bit 4: Slot2Phone
+    b1_sl1ph   = _yn(b1 & 0x08)  # bit 3: Slot1Phone
+    b1_vp      = _yn(b1 & 0x04)  # bit 2: VirtualPeer
+    b1_cps     = _yn(b1 & 0x02)  # bit 1: CPSAvailable / FirmwareNet
+    b1_unk     = b1 & 0x21       # bits 5 and 0 still unknown
+    b1_unk_note = f'  *** unknown bits = 0x{b1_unk:02x} ***' if b1_unk else ''
+
     print(f'{pfx}FLAGS (raw 0x{flags.hex()}):')
-    print(f'{pfx}  byte[0] unknown:  0x{b0:02x}{b0_note}')
-    print(f'{pfx}  byte[1] unknown:  0x{b1:02x}{b1_note}')
+    print(f'{pfx}  byte[0]:  Slot2Wireline={b0_wl2}  Slot1Wireline={b0_wl1}  WirelineSvc={b0_wlsvc}{b0_unk_note}')
+    print(f'{pfx}  byte[1]:  MNIS={b1_mnis}  IPSiteFreq={b1_ipsite}  Slot2Phone={b1_sl2ph}  '
+          f'Slot1Phone={b1_sl1ph}  VirtualPeer={b1_vp}  CPSAvail={b1_cps}{b1_unk_note}')
     print(f'{pfx}  CSBK:             {_yn(b2 & CSBK_MSK)}')
     print(f'{pfx}  RPT_MON:          {_yn(b2 & RPT_MON_MSK)}')
     print(f'{pfx}  CON_APP:          {_yn(b2 & CON_APP_MSK)}'

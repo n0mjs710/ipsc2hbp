@@ -3,28 +3,31 @@
 # ---------------------------------------------------------------------------
 CALL_CONFIRMATION  = 0x05   # Ignore
 TXT_MESSAGE_ACK    = 0x54   # Ignore
-CALL_MON_STATUS    = 0x61   # Ignore
-CALL_MON_RPT       = 0x62   # Ignore
-CALL_MON_NACK      = 0x63   # Ignore
+CALL_MON_STATUS    = 0x61   # Ignore — DMRlink: CALL_MON_STATUS; node-dmr-lib: REPEATER_CALL_TRANSMISSION
+CALL_MON_RPT       = 0x62   # Ignore — DMRlink: CALL_MON_RPT;    node-dmr-lib: REPEATER_CALL_CONTROL
+CALL_MON_NACK      = 0x63   # Ignore — DMRlink: CALL_MON_NACK;   node-dmr-lib: REPEATER_BLOCK
 XCMP_XNL           = 0x70   # NEVER TOUCH — can damage repeaters
 GROUP_VOICE        = 0x80   # PROCESS — primary payload
 PVT_VOICE          = 0x81   # Ignore (log DEBUG)
 GROUP_DATA         = 0x83   # Ignore (log DEBUG)
 PVT_DATA           = 0x84   # Ignore (log DEBUG)
-RPT_WAKE_UP        = 0x85   # Ignore
-UNKNOWN_COLLISION  = 0x86   # Ignore (log DEBUG)
+RPT_WAKE_UP        = 0x85   # Ignore — repeater wake-up: seq(4)+slots(1)+type(1)
+UNKNOWN_COLLISION  = 0x86   # Ignore (log DEBUG) — DMRlink: UNKNOWN_COLLISION; node-dmr-lib: CALL_INTERRUPT_REQ
 MASTER_REG_REQ     = 0x90   # PROCESS — repeater registering with us
 MASTER_REG_REPLY   = 0x91   # SEND — our response to registration
 PEER_LIST_REQ      = 0x92   # PROCESS — repeater requesting peer list
 PEER_LIST_REPLY    = 0x93   # SEND — our peer list response
-PEER_REG_REQ       = 0x94   # Ignore
-PEER_REG_REPLY     = 0x95   # Ignore
+PEER_REG_REQ       = 0x94   # Ignore — peer-to-peer registration request (full-mesh)
+PEER_REG_REPLY     = 0x95   # Ignore — peer-to-peer registration reply
 MASTER_ALIVE_REQ   = 0x96   # PROCESS — repeater keep-alive
 MASTER_ALIVE_REPLY = 0x97   # SEND — our keep-alive reply
-PEER_ALIVE_REQ     = 0x98   # Ignore
-PEER_ALIVE_REPLY   = 0x99   # Ignore
+PEER_ALIVE_REQ     = 0x98   # Ignore — peer-to-peer keepalive request
+PEER_ALIVE_REPLY   = 0x99   # Ignore — peer-to-peer keepalive reply
 DE_REG_REQ         = 0x9A   # PROCESS — repeater deregistering
 DE_REG_REPLY       = 0x9B   # SEND — our deregister acknowledgement
+SYSTEM_MAP_REQ     = 0x9C   # Ignore — system topology query (purpose not fully known)
+SYSTEM_MAP_REPLY   = 0x9D   # Ignore — system topology reply
+UNKNOWN_9E         = 0x9E   # Ignore — possibly extended peer registration; purpose unknown
 
 # ---------------------------------------------------------------------------
 # Observed-but-unidentified opcodes
@@ -45,10 +48,14 @@ SLOT1_VOICE = 0x0A   # Voice burst on Timeslot 1
 SLOT2_VOICE = 0x8A   # Voice burst on Timeslot 2 (bit 7 set)
 
 # ---------------------------------------------------------------------------
-# IPSC version field — sent in all registration and keepalive packets.
-# Our value from DMRlink: LINK_TYPE_IPSC(0x04) + VER17(0x02) + LINK_TYPE_IPSC(0x04) + VER16(0x01).
-# Peers report their own values and may differ; the full semantics are not fully
-# understood and are being determined empirically.  See ipsc_packet_reference.md.
+# IPSC version field — 4 bytes sent in all registration and keepalive packets.
+# Encodes two protocol type+version pairs (main and backward-compatible):
+#   bytes 0-1: main protocol — high 6 bits = type, low 10 bits = version
+#   bytes 2-3: compat protocol — same layout
+# Protocol types: 0x01=IPSC, 0x02=CapacityPlus, 0x03=Application, 0x04=LinkedCapacityPlus
+# Our value 0x04020401 = IPSC v2 main / IPSC v1 compat (from DMRlink).
+# Peers report their own values; full semantics still being determined empirically.
+# See ipsc_packet_reference.md.
 # ---------------------------------------------------------------------------
 IPSC_VER = b'\x04\x02\x04\x01'
 
