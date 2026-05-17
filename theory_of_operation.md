@@ -4,7 +4,12 @@
 
 ## 1. Overview
 
-`ipsc2hbp` is a single-process, bidirectional protocol translator that connects one or more Motorola MOTOTRBO repeaters to one upstream DMR network server. It presents itself to the repeaters as a full IPSC master (supporting up to 14 simultaneous IPSC peers), and presents itself to the network as an HBP repeater/peer. Between them it converts voice call frames in real time.
+`ipsc2hbp` is a single-process, bidirectional protocol translator that connects a Motorola MOTOTRBO IPSC system to one upstream DMR network server. It presents itself to the HBP network as a repeater/peer and converts voice call frames in real time.
+
+On the IPSC side it operates in one of two modes selected by configuration:
+
+- **MASTER mode** (default): ipsc2hbp acts as the IPSC master node, accepting up to 14 simultaneous IPSC peers (repeaters). This is the typical deployment when you control the IPSC system.
+- **PEER mode**: ipsc2hbp registers with an existing IPSC master (e.g., a repeater configured as master). All traffic on that IPSC system is forwarded to HBP. Peer mode is also useful for protocol research: SYSTEM_MAP packets (0x9C/0x9D) are logged at INFO with full hex when observed.
 
 The previous solution for this problem was two separate Python 2 processes — `IPSC_Bridge` from DMRlink and `HB_Bridge` from HBlink — communicating over a local UDP socket using an intermediate AMBE frame format. `ipsc2hbp` replaces both with a single Python 3 process that translates directly in memory, with no inter-process communication.
 
@@ -16,6 +21,7 @@ The previous solution for this problem was two separate Python 2 processes — `
 
 Single Python process. Single asyncio event loop. Two UDP endpoints. No threads. No subprocesses.
 
+Master mode (default):
 ```
                 ┌───────────────────────────────────────┐
                 │               ipsc2hbp                │
@@ -31,6 +37,22 @@ Single Python process. Single asyncio event loop. Two UDP endpoints. No threads.
                 └───────────────────────────────────────┘
 ```
 
+Peer mode (`mode = "PEER"`):
+```
+                ┌───────────────────────────────────────┐
+                │               ipsc2hbp                │
+                │                                       │
+  Motorola      │  ┌───────────┐    ┌───────────────┐   │       HBP
+  Repeater  UDP │  │  IPSC     │    │  HBP          │   │  UDP
+  (IPSC ────────►  │  peer     │◄──►│  peer         ├───┼────────► BrandMeister
+  master) ◄─────│  │  → master │    │  → master_ip  │   │         DMR+
+                │  └───────────┘    └───────────────┘   │         HBlink4
+                │         ▲                ▲            │
+                │         └────────────────┘            │
+                │           CallTranslator              │
+                └───────────────────────────────────────┘
+```
+
 ### 2.2 Repository Layout
 
 ```
@@ -38,7 +60,7 @@ ipsc2hbp/
 ├── ipsc2hbp.py              # Entry point — wires all components, runs event loop
 ├── config.py                # TOML config parsing and validation → Config dataclass
 ├── ipsc/
-│   ├── protocol.py          # asyncio.DatagramProtocol — IPSC master stack
+│   ├── protocol.py          # asyncio.DatagramProtocol — IPSC master and peer stacks
 │   └── const.py             # IPSC opcodes, burst types, field offsets, flag masks
 ├── hbp/
 │   ├── protocol.py          # asyncio.DatagramProtocol + reconnect manager — HBP peer
@@ -61,8 +83,8 @@ ipsc2hbp/
 
 1. Parse CLI arguments (`-c config`, `--log-level override`, `--wire`)
 2. Load and validate TOML config → `Config` dataclass (fail loudly on any error)
-3. Instantiate `CallTranslator`, `IPSCProtocol`, `HBPClient`; wire them together
-4. Register SIGTERM/SIGINT handlers for graceful shutdown
+3. Instantiate `CallTranslator`; instantiate `IPSCMasterProtocol` or `IPSCPeerProtocol` based on `[ipsc] mode`; instantiate `HBPClient`; wire them together
+4. Register SIGTERM/SIGINT handlers for graceful shutdown (calls `ipsc_proto.stop()` for clean DE_REG_REQ in peer mode)
 5. Bind IPSC UDP endpoint (asyncio datagram endpoint, local)
 6. Start `HBPClient` (launches connection loop if PERSISTENT mode; waits for peer in TRACKING mode)
 7. Run event loop forever
@@ -79,14 +101,19 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 - `log_level` — `DEBUG | INFO | WARNING | ERROR` (DEBUG logs every voice burst; INFO for production)
 
 **`[ipsc]`**
-- `bind_ip` — local IP to bind the IPSC UDP socket (`0.0.0.0` for all interfaces)
-- `bind_port` — UDP port the repeater connects to (must match the codeplug)
-- `ipsc_master_id` — radio ID this translator presents as the IPSC master node
-- `allowed_peer_ids` — TOML array of integers; if non-empty, only repeaters with a listed radio ID may register; empty (`[]`) accepts any radio ID
-- `allowed_peer_ips` — TOML array of strings; if non-empty, only registrations from listed source IPs are accepted; empty (`[]`) accepts any source IP
+- `mode` — `MASTER` (default) or `PEER`. In MASTER mode ipsc2hbp acts as the IPSC master; repeaters register with it. In PEER mode ipsc2hbp registers with an existing IPSC master (e.g. a repeater acting as master).
+- `bind_ip` — local IP to bind the IPSC UDP socket (`0.0.0.0` for all interfaces); used in both modes
+- `bind_port` — local UDP port; in MASTER mode this is the port repeaters connect to (must match the codeplug); in PEER mode this is the local source port
+- `ipsc_master_id` — radio ID this translator presents on the IPSC network; in MASTER mode this is the master node ID; in PEER mode this is the peer radio ID we register with
+- `master_ip` — *peer mode only* — IP address of the IPSC master to connect to
+- `master_port` — *peer mode only* — UDP port of the IPSC master
+- `allowed_peer_ids` — *master mode only* — TOML array of integers; if non-empty, only repeaters with a listed radio ID may register; empty (`[]`) accepts any radio ID
+- `allowed_peer_ips` — *master mode only* — TOML array of strings; if non-empty, only registrations from listed source IPs are accepted; empty (`[]`) accepts any source IP
 - `auth_enabled` — boolean; enables HMAC-SHA1 packet authentication
 - `auth_key` — hex string, up to 40 hex chars (20 bytes); shorter keys are left-zero-padded
-- `keepalive_watchdog` — seconds without keepalive before declaring peer lost (minimum 5)
+- `keepalive_watchdog` — seconds without keepalive before declaring the other side lost (minimum 5); in MASTER mode this is how long before a silent repeater is dropped; in PEER mode this is how long before we declare the master lost and re-register
+- `keepalive_interval` — *peer mode only* — seconds between MASTER_ALIVE_REQ sends (default 5)
+- `keepalive_missed_max` — *peer mode only* — consecutive unanswered keepalives before declaring the master lost and re-registering (default 3; at interval=5 and max=3, failure is detected in ~15 seconds)
 - `ts_prefer_call_info` — boolean (default `false`). When `true`, ipsc2hbp uses call_info byte 17 to determine the timeslot for all burst types, including SLOT_VOICE. Set this only when IPSC traffic passes through **DMRlink confbridge.py** for timeslot translation: confbridge rewrites call_info (byte 17) correctly but does not rewrite burst_type (byte 30), so the two TS fields disagree. The default (`false`) uses burst_type bit 7 for SLOT_VOICE, which is the protocol-correct source on real Motorola hardware, and logs a WARNING once per session per affected TS when the two fields disagree. Remove or set `false` once confbridge is patched to rewrite both fields.
 
 **`[hbp]`**
@@ -99,11 +126,13 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 
 ---
 
-## 4. IPSC Master Stack
+## 4. IPSC Stack
 
 ### 4.1 Protocol Overview
 
-IPSC (Inter-IPSC Site Communication Protocol) is a proprietary Motorola MOTOTRBO protocol. ipsc2hbp operates as the **IPSC master**; the repeater is the **IPSC peer**. All packets are UDP datagrams. Packet authentication is optional HMAC-SHA1 (section 4.2).
+IPSC (Inter-IPSC Site Communication Protocol) is a proprietary Motorola MOTOTRBO protocol. All packets are UDP datagrams. Packet authentication is optional HMAC-SHA1 (section 4.2).
+
+In **MASTER mode** ipsc2hbp is the IPSC master; repeaters are IPSC peers. In **PEER mode** ipsc2hbp is an IPSC peer; a repeater (or other MOTOTRBO device) is the master. The translator layer is unaffected by the mode — it receives the same `ipsc_voice_received` / `peer_joined` / `peer_lost` callbacks regardless.
 
 ### 4.2 IPSC Authentication
 
@@ -148,8 +177,8 @@ All IPSC opcodes:
 | `0x99` | PEER_ALIVE_REPLY | DEBUG logged — received, not handled |
 | `0x9A` | DE_REG_REQ | Processed — deregistration |
 | `0x9B` | DE_REG_REPLY | DEBUG logged — received, not handled (we are master, not peer) |
-| `0x9C` | SYSTEM_MAP_REQ | **Must implement** — CPS sends this after registration when peer list is non-empty; no reply causes CPS to hang; payload format unknown pending wire capture |
-| `0x9D` | SYSTEM_MAP_REPLY | **Must implement** — reply to 0x9C; also must be proactively pushed to CPS peers when repeater topology changes; payload format unknown |
+| `0x9C` | SYSTEM_MAP_REQ | Not yet implemented — payload format unknown; logged at INFO with full hex in peer mode for capture |
+| `0x9D` | SYSTEM_MAP_REPLY | Not yet implemented — payload format unknown; **logged at INFO with full hex in peer mode** — connect in peer mode while running CPS against the repeater master to capture this |
 | `0x9E` | UNKNOWN_9E | DEBUG logged — possibly extended peer registration; not handled |
 | `0xB2` | WIRELINE | DEBUG logged — MNIS data sub-protocol; not handled |
 | `0xE0` | REMOTE_PROG_REQ | DEBUG logged — CPS remote programming session request; not handled |
@@ -157,7 +186,7 @@ All IPSC opcodes:
 | `0xF0` | OPCODE_0xF0 | DEBUG logged — observed benign; appears post-keepalive in later firmware |
 | All others | — | WARNING logged with opcode and raw hex payload |
 
-### 4.4 Registration Handshake
+### 4.4 Registration Handshake (MASTER mode)
 
 When the repeater boots, it sends `MASTER_REG_REQ`. ipsc2hbp responds immediately with `MASTER_REG_REPLY` and then `PEER_LIST_REPLY`.
 
@@ -198,13 +227,35 @@ Bytes 15–16: Repeater's UDP port (big-endian uint16)
 Byte  17:    Repeater's mode byte (echoed back)
 ```
 
-### 4.5 Keepalive and Watchdog
+### 4.5 Keepalive and Watchdog (MASTER mode)
 
 The repeater sends `MASTER_ALIVE_REQ` (opcode `0x96`) periodically. ipsc2hbp responds with `MASTER_ALIVE_REPLY` (opcode `0x97`, 14 bytes: master_id + ts_flags + IPSC_VER) and updates `_last_ka = time()`.
 
 A background asyncio task checks every 5 seconds: for each registered peer, if `time() - peer['last_ka'] > keepalive_watchdog`, that peer is removed. `CallTranslator.peer_lost()` is called only when the last peer is removed (N→0 transition).
 
-### 4.6 GROUP_VOICE Packet Layout
+### 4.6 Registration and Keepalive (PEER mode)
+
+ipsc2hbp initiates the connection and drives the keepalive cadence.
+
+**Registration sequence:**
+```
+→ MASTER_REG_REQ  opcode(1) + our_id(4) + ts_flags(5) + IPSC_VER(4)   [14 bytes]
+← MASTER_REG_REPLY opcode(1) + master_id(4) + ts_flags(5) + peer_count(2) + IPSC_VER(4)
+→ PEER_LIST_REQ   opcode(1) + our_id(4)                                 [5 bytes]
+← PEER_LIST_REPLY opcode(1) + master_id(4) + len(2) + entries...
+```
+
+After `MASTER_REG_REPLY` is received, `CallTranslator.peer_joined()` is called (first time or after re-registration).
+
+**Keepalive:** every `keepalive_interval` seconds ipsc2hbp sends `MASTER_ALIVE_REQ` and increments a missed-reply counter. When `MASTER_ALIVE_REPLY` is received the counter resets to zero. Any reply from the master (REG_REPLY, PEER_LIST_REPLY, ALIVE_REPLY) resets the counter.
+
+**Missed-reply watchdog:** if `_missed >= keepalive_missed_max` consecutive keepalives go unanswered, `CallTranslator.peer_lost()` is called and registration restarts. The same counter governs registration retries: if `MASTER_REG_REPLY` does not arrive within `keepalive_missed_max` ticks, `MASTER_REG_REQ` is re-sent. Re-registration loops automatically until the master responds. This count-based approach is used instead of a wall-clock watchdog because ipsc2hbp controls the send cadence and can therefore count missed replies precisely.
+
+**Shutdown:** `SIGTERM`/`SIGINT` triggers a `DE_REG_REQ` before the socket closes.
+
+**`MSTR_PEER_MSK` (bit 0 of FLAGS byte 3)** is cleared in peer mode so the master knows ipsc2hbp is not itself a master node. In master mode this bit is always set.
+
+### 4.7 GROUP_VOICE Packet Layout
 
 Real MOTOTRBO repeaters send GROUP_VOICE packets in one fixed format — the full 31-byte header is always present, including a 12-byte RTP subheader. Packet size varies by burst type:
 
@@ -230,7 +281,7 @@ Bytes 31+:     Burst payload (variable, type-dependent — see section 5)
 
 Minimum accepted length: **31 bytes** (must be long enough to read burst_type at byte 30).
 
-### 4.7 Burst Data Types
+### 4.8 Burst Data Types
 
 The burst data type byte encodes both the frame type and, for voice bursts, the timeslot. All GROUP_VOICE packets also carry a redundant TS indicator in call_info byte 17 bit 5; the two sources are always consistent on real Motorola hardware.
 
@@ -559,14 +610,20 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 |-------|-------|
 | Startup parameters | INFO |
 | Shutdown (SIGTERM / SIGINT) | INFO |
-| IPSC peer joined (first peer, 0→1) | INFO |
-| IPSC peer registered or re-registered | INFO |
-| IPSC peer lost (watchdog or DE_REG); last peer gone (N→0) | WARNING |
+| IPSC peer joined (first peer, 0→1) — MASTER mode | INFO |
+| IPSC peer registered or re-registered — MASTER mode | INFO |
+| IPSC peer lost (watchdog or DE_REG); last peer gone (N→0) — MASTER mode | WARNING |
 | IPSC peer rejected — radio ID not in allowed_peer_ids | WARNING |
 | IPSC peer rejected — source IP not in allowed_peer_ips | WARNING |
 | IPSC peer rejected — capacity (14 peers already registered) | WARNING |
 | IPSC peer rejected — hijack attempt (different IP for same ID) | WARNING |
 | IPSC auth failure | WARNING |
+| IPSC peer: registered with master (PEER mode) | INFO |
+| IPSC peer: no registration reply from master — retrying (PEER mode) | WARNING |
+| IPSC peer: N consecutive keepalives unanswered — re-registering (PEER mode) | WARNING |
+| IPSC peer: DE_REG_REQ sent on shutdown (PEER mode) | INFO |
+| SYSTEM_MAP_REQ (0x9C) received — logged with full hex (PEER mode) | INFO |
+| SYSTEM_MAP_REPLY (0x9D) received — logged with full hex (PEER mode) | INFO |
 | HBP connected | INFO |
 | HBP disconnected (watchdog or close) | WARNING |
 | HBP MSTNAK received | ERROR |
@@ -599,7 +656,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 | Private voice calls | Group voice only |
 | Data calls (GROUP_DATA, PVT_DATA) | Dropped silently |
 | XNL / XCMP processing | ignored |
-| More than 14 simultaneous IPSC peers | IPSC protocol maximum is 15 including the master |
+| More than 14 simultaneous IPSC peers | IPSC protocol maximum is 15 including the master (master mode only; peer mode connects to one master) |
 | Multiple HBP upstream masters | One network server only |
 | Conference, bridging, routing | Not this tool |
 | ACL / filtering | Upstream master's responsibility |

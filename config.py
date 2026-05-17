@@ -32,6 +32,13 @@ class Config:
     # [ipsc] — call stream handling
     ipsc_ts_prefer_call_info: bool  # see ts_prefer_call_info in toml
 
+    # [ipsc] — connection mode
+    ipsc_mode: str             # "MASTER" or "PEER"
+    ipsc_master_ip:   str      # peer mode only: IPSC master IP to connect to
+    ipsc_master_port: int      # peer mode only: IPSC master port to connect to
+    keepalive_interval:    int # peer mode: seconds between MASTER_ALIVE_REQ sends
+    keepalive_missed_max:  int # peer mode: consecutive unanswered keepalives before re-registering
+
     # [hbp]
     hbp_master_ip: str
     hbp_master_port: int
@@ -151,6 +158,22 @@ def load(path: str) -> Config:
     keepalive_watchdog        = get_int('ipsc',  'keepalive_watchdog', min_val=5)
     ipsc_ts_prefer_call_info  = get_bool('ipsc', 'ts_prefer_call_info', required=False, default=False)
 
+    # Connection mode — loaded early because capabilities flags depend on it
+    ipsc_mode = get_str('ipsc', 'mode', required=False, default='MASTER',
+                        choices={'MASTER', 'PEER'})
+
+    if ipsc_mode == 'PEER':
+        ipsc_master_ip   = get_str('ipsc', 'master_ip')
+        ipsc_master_port = get_int('ipsc', 'master_port', min_val=1, max_val=65535)
+    else:
+        ipsc_master_ip   = ''
+        ipsc_master_port = 0
+
+    keepalive_interval = get_int('ipsc', 'keepalive_interval',
+                                 required=False, default=5, min_val=1, max_val=300)
+    keepalive_missed_max = get_int('ipsc', 'keepalive_missed_max',
+                                   required=False, default=3, min_val=1, max_val=20)
+
     auth_key = b'\x00' * 20
     if auth_enabled:
         raw_key = get_str('ipsc', 'auth_key', required=True)
@@ -173,7 +196,9 @@ def load(path: str) -> Config:
     if use_safe_defaults:
         # Proven working values — do not change without a wire capture to verify.
         ipsc_mode_byte   = b'\x6A'            # OP + DIGITAL + TS1:on + TS2:on
-        _flags_b4 = 0x05                      # VOICE_CALL | MSTR_PEER
+        _flags_b4 = 0x04                      # VOICE_CALL
+        if ipsc_mode == 'MASTER':
+            _flags_b4 |= 0x01                 # MSTR_PEER — only set when acting as master
         if auth_enabled:
             _flags_b4 |= 0x10                 # PKT_AUTH
         ipsc_flags_bytes = b'\x00\x00\x00' + bytes([_flags_b4])
@@ -249,7 +274,7 @@ def load(path: str) -> Config:
         if _cap_bool('rpt_mon'): b2 |= 0x40
         if _cap_bool('con_app'): b2 |= 0x20
 
-        b3 = 0x01                             # MSTR_PEER always set — we are always master
+        b3 = 0x01 if ipsc_mode == 'MASTER' else 0x00   # MSTR_PEER reflects actual role
         if _cap_bool('xnl_con'):    b3 |= 0x80
         if _cap_bool('xnl_master'): b3 |= 0x40
         if _cap_bool('xnl_slave'):  b3 |= 0x20
@@ -313,6 +338,11 @@ def load(path: str) -> Config:
         auth_key=auth_key,
         keepalive_watchdog=keepalive_watchdog,
         ipsc_ts_prefer_call_info=ipsc_ts_prefer_call_info,
+        ipsc_mode=ipsc_mode,
+        ipsc_master_ip=ipsc_master_ip,
+        ipsc_master_port=ipsc_master_port,
+        keepalive_interval=keepalive_interval,
+        keepalive_missed_max=keepalive_missed_max,
         ipsc_mode_byte=ipsc_mode_byte,
         ipsc_flags_bytes=ipsc_flags_bytes,
         ipsc_version=ipsc_version,

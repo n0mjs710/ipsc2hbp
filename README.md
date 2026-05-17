@@ -2,7 +2,11 @@
 
 **NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it invovles painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
 
-**PURPOSE:** A single, small Python 3 daemon that connects one or more Motorola MOTOTRBO repeaters — via the proprietary IPSC protocol — to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.). Functions as a full IPSC master, supporting up to 14 simultaneous IPSC peers.
+**PURPOSE:** A single, small Python 3 daemon that connects a Motorola MOTOTRBO IPSC system to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
+
+Two IPSC modes are supported:
+- **MASTER** (default) — ipsc2hbp acts as the IPSC master; up to 14 MOTOTRBO repeaters register with it as peers.
+- **PEER** — ipsc2hbp registers with an existing IPSC master (e.g. a repeater configured as master). All traffic on that IPSC system is forwarded to HBP.
 
 **WHY THIS EXISTS:**
 

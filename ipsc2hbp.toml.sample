@@ -9,13 +9,35 @@
 log_level = "INFO"
 
 [ipsc]
-# IP address to bind the IPSC master UDP socket.
-# Use "0.0.0.0" to listen on all interfaces.
+# IPSC connection mode: "MASTER" (default) or "PEER"
+#
+# MASTER: ipsc2hbp acts as the IPSC master node.  Repeaters register with it.
+#   Use this when you control the IPSC master role (the typical deployment).
+#
+# PEER: ipsc2hbp registers with an existing IPSC master (e.g., a repeater
+#   configured as master, or another MOTOTRBO system you do not control).
+#   All traffic on the IPSC system is visible and forwarded to HBP.
+#   Peer mode also enables passive capture of SYSTEM_MAP packets (0x9C/0x9D),
+#   which are logged at INFO with full hex when observed — useful for protocol
+#   research while running CPS against the repeater master.
+mode = "MASTER"
+
+# Peer mode only: address of the IPSC master to connect to.
+# In master mode these fields are ignored.
+# master_ip   = "192.168.1.100"
+# master_port = 50000
+
+# IP address to bind the local IPSC UDP socket.
+# In master mode:  the address repeaters connect to (must match codeplug).
+# In peer mode:    the local source address for our outbound connection.
+# Use "0.0.0.0" to bind on all interfaces.
 bind_ip   = "0.0.0.0"
 bind_port = 50000
 
-# Radio ID this translator presents as the IPSC master node.
-# This is NOT the repeater's radio ID — use a unique value for this system.
+# Radio ID this translator presents on the IPSC network.
+# In master mode:  the ID repeaters see as the master node.
+# In peer mode:    the ID we register with to the master.
+# Must be unique on the IPSC system.  This is NOT the repeater's own radio ID.
 ipsc_master_id = 9999999
 
 # Optional: restrict which repeater radio IDs may register.
@@ -39,9 +61,21 @@ auth_enabled = false
 auth_key = ""
 
 # Watchdog timeout (seconds): how long without a keep-alive before the
-# repeater is declared lost.  Set generously for variable firewall timers.
+# peer/master is declared lost.  Set generously for variable firewall timers.
 # Minimum: 5.  Recommended: 60.
 keepalive_watchdog = 60
+
+# Keepalive send interval (seconds) — peer mode only.
+# How often ipsc2hbp sends MASTER_ALIVE_REQ to the master.
+# 5 seconds matches the Motorola default interval.
+# In master mode this field is unused; repeaters drive their own keepalives.
+# keepalive_interval = 5
+
+# Missed keepalive limit — peer mode only.
+# How many consecutive MASTER_ALIVE_REQs can go unanswered before ipsc2hbp
+# declares the master lost and re-registers.  At keepalive_interval=5 and
+# keepalive_missed_max=3, failure is detected within ~15 seconds.
+# keepalive_missed_max = 3
 
 # ---------------------------------------------------------------------------
 # DMRlink confbridge.py timeslot compatibility

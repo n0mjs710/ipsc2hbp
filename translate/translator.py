@@ -142,7 +142,7 @@ def _build_ipsc_voice_payload(lc: bytes, burst_type: int) -> bytes:
 
 class CallTranslator:
     """
-    Wires IPSCProtocol and HBPClient together.
+    Wires IPSCMasterProtocol/IPSCPeerProtocol and HBPClient together.
 
     Instantiate first, then pass to both protocol objects, then call
     set_protocols() so the translator can reach back into each stack.

@@ -1,11 +1,15 @@
 """
-IPSC master stack — asyncio DatagramProtocol.
+IPSC protocol stacks — asyncio DatagramProtocol.
 
-Handles up to 14 Motorola MOTOTRBO repeaters connecting as IPSC peers
-(IPSC supports 15 peers maximum; the master counts as one).
+Two classes:
+  IPSCMasterProtocol — ipsc2hbp acts as the IPSC master; repeaters register
+      with it.  Handles up to 14 simultaneous IPSC peers.
+  IPSCPeerProtocol   — ipsc2hbp registers with an existing IPSC master (e.g.
+      a repeater acting as master).  Single upstream connection with automatic
+      re-registration on watchdog timeout.
 
-Manages registration, peer list distribution, per-peer keepalive watchdog,
-and GROUP_VOICE dispatch.
+Both present the same send_voice / has_peers / stop interface to the
+translator layer, which is unaffected by the mode choice.
 
 Packet layout confirmed from DMRlink IPSC_Bridge.py / dmrlink.py source.
 """
@@ -26,6 +30,7 @@ from ipsc.const import (
     DE_REG_REQ, DE_REG_REPLY, OPCODE_0xF0,
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
     REPEATER_BLOCKED, CALL_INTERRUPT_REQ, XCMP_XNL,
+    SYSTEM_MAP_REQ, SYSTEM_MAP_REPLY,
     VOICE_HEAD, VOICE_TERM,
     TS_CALL_MSK,
     GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF,
@@ -65,7 +70,7 @@ _KNOWN_UNHANDLED = {
 _MAX_PEERS = 14
 
 
-class IPSCProtocol(asyncio.DatagramProtocol):
+class IPSCMasterProtocol(asyncio.DatagramProtocol):
 
     def __init__(self, config: Config, translator):
         self._cfg        = config
@@ -94,7 +99,7 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        log.info('IPSC master listening on %s:%d  (max %d peers)',
+        log.info('IPSC master listening — %s:%d  (max %d peers)',
                  self._cfg.ipsc_bind_ip, self._cfg.ipsc_bind_port, _MAX_PEERS)
         self._watchdog_task = asyncio.get_running_loop().create_task(self._watchdog_loop())
 
@@ -376,6 +381,9 @@ class IPSCProtocol(asyncio.DatagramProtocol):
     # Public interface for inbound path (HBP → IPSC)
     # ------------------------------------------------------------------
 
+    def stop(self):
+        """No-op in master mode; peers de-register themselves or time out."""
+
     def send_voice(self, packet: bytes):
         """Send a pre-built GROUP_VOICE packet to all registered IPSC peers."""
         for p in self._peers.values():
@@ -383,3 +391,293 @@ class IPSCProtocol(asyncio.DatagramProtocol):
 
     def has_peers(self) -> bool:
         return bool(self._peers)
+
+
+# ---------------------------------------------------------------------------
+# Opcodes IPSCPeerProtocol receives from the master but does not act on.
+# ---------------------------------------------------------------------------
+_PEER_KNOWN_UNHANDLED = {
+    0x05: 'CALL_CONFIRMATION',
+    0x54: 'TXT_MESSAGE_ACK',
+    0x61: 'CALL_MON_STATUS',
+    0x62: 'CALL_MON_RPT',
+    0x63: 'REPEATER_BLOCKED',
+    0x81: 'PVT_VOICE',
+    0x83: 'GROUP_DATA',
+    0x84: 'PVT_DATA',
+    0x85: 'RPT_WAKE_UP',
+    0x86: 'CALL_INTERRUPT_REQ',
+    0x94: 'PEER_REG_REQ',        # peer-to-peer mesh; not needed for this use case
+    0x95: 'PEER_REG_REPLY',      # peer-to-peer mesh
+    0x98: 'PEER_ALIVE_REQ',      # peer-to-peer keepalive
+    0x99: 'PEER_ALIVE_REPLY',    # peer-to-peer keepalive
+    0x9B: 'DE_REG_REPLY',        # master's ack of our DE_REG_REQ
+    0x9E: 'UNKNOWN_9E',
+    0xB2: 'WIRELINE',
+    0xE0: 'REMOTE_PROG_REQ',
+    0xE1: 'REMOTE_PROG_REPLY',
+    0xF0: 'OPCODE_0xF0',
+}
+
+
+class IPSCPeerProtocol(asyncio.DatagramProtocol):
+    """
+    IPSC peer stack — registers with an existing IPSC master as a peer.
+
+    Manages outbound registration, keepalive, watchdog-triggered
+    re-registration, and GROUP_VOICE dispatch.  Presents the same
+    send_voice / has_peers / stop interface as IPSCMasterProtocol so
+    the translator layer is entirely unaffected by the mode choice.
+
+    Notable: SYSTEM_MAP_REPLY (0x9D) is logged at INFO with full hex
+    because this is the packet format we are actively trying to capture
+    for analysis.  Connect to a repeater-as-master with a packet capture
+    running on the CPS machine to observe the full exchange.
+    """
+
+    _IDLE        = 'IDLE'
+    _REGISTERING = 'REGISTERING'
+    _REGISTERED  = 'REGISTERED'   # peer list requested; keepalive not yet started
+    _ACTIVE      = 'ACTIVE'       # fully established; keepalives running
+
+    def __init__(self, config: Config, translator):
+        self._cfg        = config
+        self._translator = translator
+        self._transport  = None
+        self._keepalive_task = None
+
+        self._state     = self._IDLE
+        self._connected = False   # True after first successful registration
+        self._missed    = 0       # consecutive keepalives/registration attempts without a reply
+
+        self._our_id      = config.ipsc_master_id.to_bytes(4, 'big')
+        self._ts_flags    = config.ipsc_mode_byte + config.ipsc_flags_bytes  # 5 bytes
+        self._master_addr = (config.ipsc_master_ip, config.ipsc_master_port)
+
+    # ------------------------------------------------------------------
+    # asyncio protocol interface
+    # ------------------------------------------------------------------
+
+    def connection_made(self, transport):
+        self._transport = transport
+        log.info('IPSC peer socket bound — connecting to master %s:%d as id=%d',
+                 self._cfg.ipsc_master_ip, self._cfg.ipsc_master_port,
+                 self._cfg.ipsc_master_id)
+        self._keepalive_task = asyncio.get_running_loop().create_task(
+            self._registration_and_keepalive()
+        )
+
+    def connection_lost(self, exc):
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+
+    def error_received(self, exc):
+        log.warning('IPSC peer socket error: %s', exc)
+
+    def datagram_received(self, data: bytes, addr):
+        host, port = addr[0], addr[1]
+
+        # Only accept packets from our configured master
+        if host != self._cfg.ipsc_master_ip:
+            log.debug('IPSC peer: packet from unexpected host %s — dropped', host)
+            return
+
+        if self._cfg.auth_enabled:
+            if not self._check_auth(data):
+                log.warning('IPSC auth failure from master %s:%d — packet dropped', host, port)
+                return
+            data = data[:-AUTH_DIGEST_LEN]
+
+        if not data:
+            return
+
+        _wire.debug('IPSC RECV %s %d %s', host, len(data), data.hex())
+
+        opcode = data[0]
+
+        if opcode == XCMP_XNL:
+            log.debug('XCMP/XNL from master %s:%d — ignored', host, port)
+            return
+
+        if opcode == GROUP_VOICE:
+            self._on_group_voice(data, host, port)
+        elif opcode == MASTER_REG_REPLY:
+            self._on_reg_reply(data, host, port)
+        elif opcode == PEER_LIST_REPLY:
+            self._on_peer_list_reply(data, host, port)
+        elif opcode == MASTER_ALIVE_REPLY:
+            self._on_alive_reply(data, host, port)
+        elif opcode == SYSTEM_MAP_REPLY:
+            # Log at INFO with full hex — this is the packet format we are hunting.
+            # Run CPS against the repeater-as-master while connected in peer mode
+            # and capture this to decode the system topology payload.
+            log.info('SYSTEM_MAP_REPLY (0x9D) from master %s:%d len=%d raw=%s',
+                     host, port, len(data), data.hex())
+        elif opcode == SYSTEM_MAP_REQ:
+            log.info('SYSTEM_MAP_REQ (0x9C) from master %s:%d len=%d raw=%s',
+                     host, port, len(data), data.hex())
+        elif opcode in (GROUP_DATA, PVT_DATA):
+            log.debug('Data packet 0x%02x from master %s:%d — ignored', opcode, host, port)
+        elif opcode in _PEER_KNOWN_UNHANDLED:
+            log.debug('%s (0x%02x) from master %s:%d — received, not handled',
+                      _PEER_KNOWN_UNHANDLED[opcode], opcode, host, port)
+        else:
+            log.warning('unknown opcode 0x%02x from master %s:%d len=%d — no handler  raw=%s',
+                        opcode, host, port, len(data), data.hex())
+
+    # ------------------------------------------------------------------
+    # Opcode handlers
+    # ------------------------------------------------------------------
+
+    def _on_reg_reply(self, data: bytes, host: str, port: int):
+        if len(data) < 12:
+            log.warning('IPSC peer: MASTER_REG_REPLY too short (%d bytes) from %s:%d',
+                        len(data), host, port)
+            return
+        master_id  = int.from_bytes(data[1:5], 'big')
+        peer_count = int.from_bytes(data[10:12], 'big')
+        self._missed = 0
+        self._state  = self._REGISTERED
+        log.info('IPSC peer: registered with master id=%d at %s:%d  peers=%d',
+                 master_id, host, port, peer_count)
+        # Request peer list immediately
+        self._send(bytes([PEER_LIST_REQ]) + self._our_id, *self._master_addr)
+        # Notify translator on first connection or re-connection after watchdog
+        if not self._connected:
+            self._connected = True
+            self._translator.peer_joined()
+
+    def _on_peer_list_reply(self, data: bytes, host: str, port: int):
+        self._missed = 0
+        self._state  = self._ACTIVE
+        log.debug('PEER_LIST_REPLY from master %s:%d  len=%d', host, port, len(data))
+
+    def _on_alive_reply(self, data: bytes, host: str, port: int):
+        self._missed = 0
+        log.debug('MASTER_ALIVE_REPLY from master %s:%d', host, port)
+
+    def _on_group_voice(self, data: bytes, host: str, port: int):
+        if not self._connected:
+            return
+        if len(data) < GV_MIN_LEN:
+            log.warning('GROUP_VOICE too short (%d bytes) from master %s:%d',
+                        len(data), host, port)
+            return
+
+        burst_type = data[GV_BURST_TYPE_OFF]
+        call_info  = data[GV_CALL_INFO_OFF]
+
+        log.debug('GROUP_VOICE len=%d burst=0x%02x raw[0:32]=%s from master %s:%d',
+                  len(data), burst_type, data[:32].hex(), host, port)
+
+        if burst_type in (VOICE_HEAD, VOICE_TERM):
+            ts = 2 if (call_info & TS_CALL_MSK) else 1
+        else:
+            ts = 2 if (burst_type & 0x80) else 1
+
+        self._translator.ipsc_voice_received(data, ts, burst_type)
+
+    # ------------------------------------------------------------------
+    # Registration and keepalive loop
+    # ------------------------------------------------------------------
+
+    def _register(self):
+        pkt = (
+            bytes([MASTER_REG_REQ])
+            + self._our_id
+            + self._ts_flags
+            + self._cfg.ipsc_version
+        )
+        self._send(pkt, *self._master_addr)
+        self._missed = 0
+        self._state  = self._REGISTERING
+        log.debug('IPSC peer: sent MASTER_REG_REQ to master %s:%d', *self._master_addr)
+
+    def _send_alive(self):
+        pkt = (
+            bytes([MASTER_ALIVE_REQ])
+            + self._our_id
+            + self._ts_flags
+            + self._cfg.ipsc_version
+        )
+        self._send(pkt, *self._master_addr)
+        log.debug('MASTER_ALIVE_REQ → master %s:%d', *self._master_addr)
+
+    def _lose_connection(self):
+        was_connected  = self._connected
+        self._connected = False
+        self._state     = self._IDLE
+        if was_connected:
+            self._translator.peer_lost()
+
+    async def _registration_and_keepalive(self):
+        self._register()
+        while True:
+            await asyncio.sleep(self._cfg.keepalive_interval)
+            self._translator.check_call_timeouts()
+
+            if self._state == self._REGISTERING:
+                # Count ticks without a reply; retry after keepalive_missed_max attempts
+                self._missed += 1
+                if self._missed >= self._cfg.keepalive_missed_max:
+                    log.warning(
+                        'IPSC peer: no registration reply from master %s:%d '
+                        'after %d attempts — retrying',
+                        *self._master_addr, self._cfg.keepalive_missed_max,
+                    )
+                    self._register()   # resets _missed to 0
+
+            elif self._state in (self._REGISTERED, self._ACTIVE):
+                if self._missed >= self._cfg.keepalive_missed_max:
+                    log.warning(
+                        'IPSC peer: %d consecutive keepalives unanswered by master %s:%d '
+                        '— re-registering',
+                        self._cfg.keepalive_missed_max, *self._master_addr,
+                    )
+                    self._lose_connection()
+                    self._register()   # resets _missed to 0
+                else:
+                    self._send_alive()
+                    self._missed += 1
+
+    # ------------------------------------------------------------------
+    # Auth helpers (identical to IPSCMasterProtocol)
+    # ------------------------------------------------------------------
+
+    def _check_auth(self, data: bytes) -> bool:
+        if len(data) <= AUTH_DIGEST_LEN:
+            return False
+        payload  = data[:-AUTH_DIGEST_LEN]
+        received = data[-AUTH_DIGEST_LEN:]
+        expected = hmac_mod.new(self._cfg.auth_key, payload, sha1).digest()[:10]
+        return received == expected
+
+    def _auth_suffix(self, packet: bytes) -> bytes:
+        if not self._cfg.auth_enabled:
+            return b''
+        return hmac_mod.new(self._cfg.auth_key, packet, sha1).digest()[:10]
+
+    def _send(self, packet: bytes, host: str, port: int):
+        out = packet + self._auth_suffix(packet)
+        _wire.debug('IPSC SEND %s %d %s', host, len(packet), packet.hex())
+        self._transport.sendto(out, (host, port))
+
+    # ------------------------------------------------------------------
+    # Public interface (matches IPSCMasterProtocol)
+    # ------------------------------------------------------------------
+
+    def stop(self):
+        """Send DE_REG_REQ to the master for a clean shutdown."""
+        if self._connected:
+            pkt = bytes([DE_REG_REQ]) + self._our_id
+            self._send(pkt, *self._master_addr)
+            log.info('IPSC peer: sent DE_REG_REQ to master %s:%d', *self._master_addr)
+        self._connected = False
+
+    def send_voice(self, packet: bytes):
+        """Send a pre-built GROUP_VOICE packet to the IPSC master."""
+        if self._connected:
+            self._send(packet, *self._master_addr)
+
+    def has_peers(self) -> bool:
+        return self._connected

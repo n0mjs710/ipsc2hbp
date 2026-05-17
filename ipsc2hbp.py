@@ -1,7 +1,7 @@
 """
 ipsc2hbp — entry point.
 
-Wires IPSCProtocol, HBPClient, and CallTranslator together and runs
+Wires IPSCMasterProtocol/IPSCPeerProtocol, HBPClient, and CallTranslator together and runs
 the asyncio event loop.
 """
 
@@ -61,16 +61,32 @@ def main():
         _setup_logging(log_level)
 
     log = logging.getLogger('ipsc2hbp')
-    log.info('ipsc2hbp starting — IPSC master_id=%d  HBP repeater_id=%d  %s:%d  mode=%s',
-             cfg.ipsc_master_id, cfg.hbp_repeater_id,
-             cfg.hbp_master_ip, cfg.hbp_master_port, cfg.hbp_mode)
+    if cfg.ipsc_mode == 'MASTER':
+        log.info(
+            'ipsc2hbp starting — ipsc=MASTER  id=%d  listen=%s:%d  '
+            'hbp_id=%d  upstream=%s:%d  hbp_mode=%s',
+            cfg.ipsc_master_id, cfg.ipsc_bind_ip, cfg.ipsc_bind_port,
+            cfg.hbp_repeater_id, cfg.hbp_master_ip, cfg.hbp_master_port, cfg.hbp_mode,
+        )
+    else:
+        log.info(
+            'ipsc2hbp starting — ipsc=PEER  id=%d  master=%s:%d  local=%s:%d  '
+            'hbp_id=%d  upstream=%s:%d  hbp_mode=%s',
+            cfg.ipsc_master_id,
+            cfg.ipsc_master_ip, cfg.ipsc_master_port,
+            cfg.ipsc_bind_ip, cfg.ipsc_bind_port,
+            cfg.hbp_repeater_id, cfg.hbp_master_ip, cfg.hbp_master_port, cfg.hbp_mode,
+        )
 
-    from ipsc.protocol import IPSCProtocol
+    from ipsc.protocol import IPSCMasterProtocol, IPSCPeerProtocol
     from hbp.protocol import HBPClient
     from translate.translator import CallTranslator
 
     translator = CallTranslator(cfg)
-    ipsc_proto = IPSCProtocol(cfg, translator)
+    if cfg.ipsc_mode == 'MASTER':
+        ipsc_proto = IPSCMasterProtocol(cfg, translator)
+    else:
+        ipsc_proto = IPSCPeerProtocol(cfg, translator)
     hbp_client = HBPClient(cfg, translator)
     translator.set_protocols(ipsc_proto, hbp_client)
 
@@ -79,6 +95,7 @@ def main():
 
     def _shutdown(signum, frame):
         log.info('Signal %d received — shutting down', signum)
+        ipsc_proto.stop()
         hbp_client.stop()
         loop.stop()
 
@@ -92,7 +109,10 @@ def main():
 
     try:
         loop.run_until_complete(ipsc_coro)
-        log.info('IPSC master endpoint up — %s:%d', cfg.ipsc_bind_ip, cfg.ipsc_bind_port)
+        if cfg.ipsc_mode == 'MASTER':
+            log.info('IPSC master endpoint up — %s:%d', cfg.ipsc_bind_ip, cfg.ipsc_bind_port)
+        else:
+            log.info('IPSC peer socket bound — %s:%d', cfg.ipsc_bind_ip, cfg.ipsc_bind_port)
         hbp_client.start(loop)
         loop.run_forever()
     except OSError as exc:
