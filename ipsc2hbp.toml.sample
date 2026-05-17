@@ -44,6 +44,32 @@ auth_key = ""
 keepalive_watchdog = 60
 
 # ---------------------------------------------------------------------------
+# DMRlink confbridge.py timeslot compatibility
+#
+# In an IPSC GROUP_VOICE packet, the active timeslot is encoded in two places:
+#   • call_info byte 17, bit 5  (used for VOICE_HEAD and VOICE_TERM)
+#   • burst_type byte 30, bit 7 (used for SLOT_VOICE bursts: 0x0A=TS1, 0x8A=TS2)
+#
+# Real Motorola hardware always writes both fields consistently.  DMRlink's
+# confbridge.py, when translating a call from TS1 to TS2, rewrites call_info
+# (byte 17) correctly but does NOT rewrite burst_type (byte 30).  This causes
+# ipsc2hbp to route SLOT_VOICE bursts to the wrong timeslot, producing a phantom
+# stream on the incorrect TS while the real call forwards only the voice header.
+#
+# When ts_prefer_call_info = false (default): ipsc2hbp uses burst_type bit 7 for
+#   SLOT_VOICE TS determination, which is the correct protocol-defined source.  A
+#   WARNING is logged once per session per affected TS whenever the two fields
+#   disagree, making the confbridge problem immediately visible in the log.
+#
+# When ts_prefer_call_info = true: ipsc2hbp uses call_info bit 5 for ALL burst
+#   types, including SLOT_VOICE.  This works around confbridge's incomplete rewrite
+#   without requiring a DMRlink update.  Set this if your IPSC source passes through
+#   DMRlink confbridge for timeslot translation.  Remove or set false once confbridge
+#   is updated to rewrite both fields.
+# ---------------------------------------------------------------------------
+ts_prefer_call_info = false
+
+# ---------------------------------------------------------------------------
 # IPSC capability advertisement
 #
 # WARNING: These fields control what ipsc2hbp tells IPSC peers about its

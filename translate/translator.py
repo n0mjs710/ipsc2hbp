@@ -50,6 +50,7 @@ from ipsc.const import (
     GROUP_VOICE,
     VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE,
     TS_CALL_MSK, END_MSK,
+    GV_CALL_SEQ_OFF, GV_CALL_INFO_OFF,
     GV_SRC_SUB_OFF, GV_DST_GROUP_OFF,
 )
 from hbp.const import (
@@ -155,19 +156,24 @@ class CallTranslator:
         self._master_id_b   = cfg.ipsc_master_id.to_bytes(4, 'big')
 
         # Outbound call state (IPSC → HBP) — keyed by timeslot (1 or 2)
-        self._out_stream_id = {1: None, 2: None}  # 4 random bytes, new per call
-        self._out_seq       = 0                   # DMRD sequence byte, wraps at 256 (shared)
-        self._out_frame_pos = {1: 0, 2: 0}        # superframe position (0–5, cycles)
-        self._out_lc        = {1: None, 2: None}  # 9-byte LC for embedded LC generation
-        self._out_emb_lc    = {1: None, 2: None}  # dict {1–4: bitarray(32)} embedded LC
+        self._out_stream_id      = {1: None, 2: None}  # 4 random bytes, new per call
+        self._out_ipsc_stream_id = {1: None, 2: None}  # IPSC byte 5: per-call constant from repeater
+        self._out_seq            = 0                   # DMRD sequence byte, wraps at 256 (shared)
+        self._out_frame_pos      = {1: 0, 2: 0}        # superframe position (0–5, cycles)
+        self._out_lc             = {1: None, 2: None}  # 9-byte LC for embedded LC generation
+        self._out_emb_lc         = {1: None, 2: None}  # dict {1–4: bitarray(32)} embedded LC
+        # Suppress repeat TS-mismatch warnings within a session (one WARNING per affected TS).
+        # Reset only on peer_lost / hbp_disconnected so each new session gets a fresh warning.
+        self._out_ts_mismatch_warned = {1: False, 2: False}
 
         # Inbound call state (HBP → IPSC) — keyed by timeslot (1 or 2)
-        self._in_lc         = {1: None, 2: None}  # 9-byte LC decoded from HBP VOICE_HEAD
-        self._in_emb_lc     = {1: None, 2: None}  # dict {1–4: bitarray(32)} from bptc.encode_emblc
-        self._in_stream_id  = {1: 0, 2: 0}        # byte 5: call stream ID, constant per call
-        self._in_stream_ctr = 0                   # increments once per call (shared across TS)
-        self._in_rtp_seq    = {1: 0, 2: 0}        # RTP sequence in GV header
-        self._in_rtp_ts     = {1: 0, 2: 0}        # RTP timestamp; increments 480/frame
+        self._in_lc            = {1: None, 2: None}  # 9-byte LC decoded from HBP VOICE_HEAD
+        self._in_emb_lc        = {1: None, 2: None}  # dict {1–4: bitarray(32)} from bptc.encode_emblc
+        self._in_stream_id     = {1: 0, 2: 0}        # byte 5: call stream ID, constant per call
+        self._in_stream_ctr    = 0                   # increments once per call (shared across TS)
+        self._in_hbp_stream_id = {1: None, 2: None}  # 4-byte HBP stream ID of active inbound call
+        self._in_rtp_seq       = {1: 0, 2: 0}        # RTP sequence in GV header
+        self._in_rtp_ts        = {1: 0, 2: 0}        # RTP timestamp; increments 480/frame
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
         self._out_last_pkt  = {1: 0.0, 2: 0.0}
@@ -191,22 +197,52 @@ class CallTranslator:
 
     def peer_lost(self):
         log.warning('IPSC peer lost')
-        self._out_stream_id  = {1: None, 2: None}
-        self._out_lc         = {1: None, 2: None}
-        self._out_emb_lc     = {1: None, 2: None}
-        self._out_last_pkt   = {1: 0.0, 2: 0.0}
-        self._in_lc          = {1: None, 2: None}
-        self._in_emb_lc      = {1: None, 2: None}
-        self._in_stream_id   = {1: 0, 2: 0}
-        self._in_last_pkt    = {1: 0.0, 2: 0.0}
-        self._peer_call_type = b'\x02'
-        self._peer_call_ctrl = b'\x00\x00\x43\xe2'
+        self._out_stream_id          = {1: None, 2: None}
+        self._out_ipsc_stream_id     = {1: None, 2: None}
+        self._out_lc                 = {1: None, 2: None}
+        self._out_emb_lc             = {1: None, 2: None}
+        self._out_last_pkt           = {1: 0.0, 2: 0.0}
+        self._out_ts_mismatch_warned = {1: False, 2: False}
+        self._in_lc                  = {1: None, 2: None}
+        self._in_emb_lc              = {1: None, 2: None}
+        self._in_stream_id           = {1: 0, 2: 0}
+        self._in_hbp_stream_id       = {1: None, 2: None}
+        self._in_last_pkt            = {1: 0.0, 2: 0.0}
+        self._peer_call_type         = b'\x02'
+        self._peer_call_ctrl         = b'\x00\x00\x43\xe2'
         if self._cfg.hbp_mode == 'TRACKING':
             self._hbp.deactivate()
 
     def ipsc_voice_received(self, data: bytes, ts: int, burst_type: int):
         if not self._hbp.is_connected():
             return
+
+        ipsc_stream_id = data[GV_CALL_SEQ_OFF]   # byte 5: constant within a call, changes per call
+
+        # For SLOT_VOICE, TS is encoded in two places: bit 7 of burst_type (protocol.py
+        # derives `ts` from this) and bit 5 of call_info byte 17.  Real Motorola hardware
+        # always agrees.  DMRlink's confbridge.py rewrites call_info (byte 17) when
+        # translating timeslots but does NOT rewrite burst_type (byte 30), so the two
+        # fields will disagree on confbridge-sourced traffic.  When they disagree we log
+        # once per affected TS per session.  Set ts_prefer_call_info = true in [ipsc] to
+        # use call_info as the authoritative TS source, working around confbridge's
+        # incomplete rewrite without requiring a DMRlink update.
+        if burst_type not in (VOICE_HEAD, VOICE_TERM):
+            ts_ci = 2 if (data[GV_CALL_INFO_OFF] & TS_CALL_MSK) else 1
+            if ts_ci != ts:
+                if not self._out_ts_mismatch_warned[ts]:
+                    log.warning(
+                        'TS mismatch on SLOT_VOICE ts=%d: burst_type→TS%d, call_info→TS%d — '
+                        'DMRlink confbridge does not rewrite burst_type when translating '
+                        'timeslots; set ts_prefer_call_info = true in [ipsc] to work around',
+                        ts, ts, ts_ci,
+                    )
+                    self._out_ts_mismatch_warned[ts] = True
+                else:
+                    log.debug('TS mismatch: burst_type→TS%d, call_info→TS%d', ts, ts_ci)
+                if self._cfg.ipsc_ts_prefer_call_info:
+                    ts = ts_ci
+
         self._out_last_pkt[ts] = time()
 
         src_sub   = data[GV_SRC_SUB_OFF   : GV_SRC_SUB_OFF   + 3]
@@ -219,11 +255,26 @@ class CallTranslator:
             self._peer_call_ctrl = data[13:17]
 
         if burst_type == VOICE_HEAD:
+            # Detect stream ID change — prior call ended without VOICE_TERM
+            if (self._out_stream_id[ts] is not None
+                    and self._out_ipsc_stream_id[ts] is not None
+                    and self._out_ipsc_stream_id[ts] != ipsc_stream_id):
+                log.warning(
+                    'IPSC stream ID changed on ts=%d (0x%02x→0x%02x) at VOICE_HEAD '
+                    '— prior call ended without VOICE_TERM, clearing stale state',
+                    ts, self._out_ipsc_stream_id[ts], ipsc_stream_id,
+                )
+                self._out_stream_id[ts]      = None
+                self._out_ipsc_stream_id[ts] = None
+                self._out_lc[ts]             = None
+                self._out_emb_lc[ts]         = None
+
             if self._out_stream_id[ts] is None:
-                self._out_stream_id[ts] = os.urandom(4)
-                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s',
+                self._out_stream_id[ts]      = os.urandom(4)
+                self._out_ipsc_stream_id[ts] = ipsc_stream_id
+                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
-                         ts, self._out_stream_id[ts].hex())
+                         ts, self._out_stream_id[ts].hex(), ipsc_stream_id)
             else:
                 # Motorola radios fire VOICE_HEAD twice at call start — once on LC
                 # detection, once confirmed. MMDVMHost absorbs this at the driver
@@ -262,6 +313,21 @@ class CallTranslator:
             flags |= HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VTERM
 
         else:  # SLOT1_VOICE or SLOT2_VOICE
+            # Detect stream ID change mid-stream — prior call ended without VOICE_TERM.
+            # Clear stale state so the code below handles this as late entry.
+            if (self._out_stream_id[ts] is not None
+                    and self._out_ipsc_stream_id[ts] is not None
+                    and self._out_ipsc_stream_id[ts] != ipsc_stream_id):
+                log.warning(
+                    'IPSC stream ID changed on ts=%d (0x%02x→0x%02x) mid-stream '
+                    '— prior call ended without VOICE_TERM, clearing stale state',
+                    ts, self._out_ipsc_stream_id[ts], ipsc_stream_id,
+                )
+                self._out_stream_id[ts]      = None
+                self._out_ipsc_stream_id[ts] = None
+                self._out_lc[ts]             = None
+                self._out_emb_lc[ts]         = None
+
             if self._out_stream_id[ts] is None:
                 # Late entry: IPSC Burst E (byte 32 == 0x16) carries dst_group and
                 # src_sub in the header, giving us enough to reconstruct the LC word
@@ -270,13 +336,14 @@ class CallTranslator:
                 if data[32] != 0x16:
                     return
                 lc = LC_OPT + dst_group + src_sub
-                self._out_stream_id[ts] = os.urandom(4)
-                self._out_lc[ts]        = lc
-                self._out_emb_lc[ts]    = bptc.encode_emblc(lc)
-                self._out_frame_pos[ts] = 4  # Burst E is superframe position 4
-                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from Burst E, stream=%s',
+                self._out_stream_id[ts]      = os.urandom(4)
+                self._out_ipsc_stream_id[ts] = ipsc_stream_id
+                self._out_lc[ts]             = lc
+                self._out_emb_lc[ts]         = bptc.encode_emblc(lc)
+                self._out_frame_pos[ts]      = 4  # Burst E is superframe position 4
+                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from Burst E, stream=%s  ipsc_id=0x%02x',
                          ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
-                         self._out_stream_id[ts].hex())
+                         self._out_stream_id[ts].hex(), ipsc_stream_id)
             if len(data) < 52:
                 log.warning('SLOT_VOICE too short for AMBE: %d bytes', len(data))
                 return
@@ -313,9 +380,10 @@ class CallTranslator:
         if burst_type == VOICE_TERM:
             log.info('IPSC call end:   src=%d  tg=%d  ts=%d',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
-            self._out_stream_id[ts] = None
-            self._out_lc[ts]        = None
-            self._out_emb_lc[ts]    = None
+            self._out_stream_id[ts]      = None
+            self._out_ipsc_stream_id[ts] = None
+            self._out_lc[ts]             = None
+            self._out_emb_lc[ts]         = None
 
     def _build_embed(self, pos: int, emb_lc) -> bitarray:
         """Build the 48-bit EMBED field for superframe position 0–5."""
@@ -334,14 +402,17 @@ class CallTranslator:
 
     def hbp_disconnected(self):
         log.warning('HBP disconnected')
-        self._out_stream_id = {1: None, 2: None}
-        self._out_lc        = {1: None, 2: None}
-        self._out_emb_lc    = {1: None, 2: None}
-        self._out_last_pkt  = {1: 0.0, 2: 0.0}
-        self._in_lc         = {1: None, 2: None}
-        self._in_emb_lc     = {1: None, 2: None}
-        self._in_stream_id  = {1: 0, 2: 0}
-        self._in_last_pkt   = {1: 0.0, 2: 0.0}
+        self._out_stream_id          = {1: None, 2: None}
+        self._out_ipsc_stream_id     = {1: None, 2: None}
+        self._out_lc                 = {1: None, 2: None}
+        self._out_emb_lc             = {1: None, 2: None}
+        self._out_last_pkt           = {1: 0.0, 2: 0.0}
+        self._out_ts_mismatch_warned = {1: False, 2: False}
+        self._in_lc                  = {1: None, 2: None}
+        self._in_emb_lc              = {1: None, 2: None}
+        self._in_stream_id           = {1: 0, 2: 0}
+        self._in_hbp_stream_id       = {1: None, 2: None}
+        self._in_last_pkt            = {1: 0.0, 2: 0.0}
 
     def hbp_voice_received(self, dmrd: bytes):
         """Inbound HBP → IPSC."""
@@ -373,8 +444,9 @@ class CallTranslator:
             frame_bits.frombytes(payload_33)
             bptc_bits = frame_bits[0:98] + frame_bits[166:264]   # 196-bit BPTC only
             lc = bptc.decode_full_lc(bptc_bits).tobytes()
-            self._in_lc[ts]     = lc
-            self._in_emb_lc[ts] = bptc.encode_emblc(lc)
+            self._in_lc[ts]         = lc
+            self._in_emb_lc[ts]     = bptc.encode_emblc(lc)
+            self._in_hbp_stream_id[ts] = hbp_stream
             # Assign a new stream ID for this call — byte 5 in GROUP_VOICE is a
             # per-call constant (stream identifier), not a per-packet counter.
             # Real Motorola equipment uses the same value for every packet of a call.
@@ -390,14 +462,29 @@ class CallTranslator:
             rtp_pt = 0x5e
 
         else:  # VOICESYNC (burst A) or VOICE (bursts B-F)
+            # Detect HBP stream ID change — prior call ended without VOICE_TERM.
+            # Clear stale state so the late-entry path below handles this as a new call.
+            if (self._in_lc[ts] is not None
+                    and self._in_hbp_stream_id[ts] is not None
+                    and self._in_hbp_stream_id[ts] != hbp_stream):
+                log.warning(
+                    'HBP stream ID changed on ts=%d (%s→%s) — prior call ended without '
+                    'VOICE_TERM, clearing stale state',
+                    ts, self._in_hbp_stream_id[ts].hex(), hbp_stream.hex(),
+                )
+                self._in_lc[ts]            = None
+                self._in_emb_lc[ts]        = None
+                self._in_hbp_stream_id[ts] = None
+
             if self._in_lc[ts] is None:
                 # Late entry: src_sub and dst_group are in every DMRD header so we
                 # can reconstruct a valid LC word immediately from any voice burst.
                 lc = LC_OPT + dst_group + src_sub
-                self._in_lc[ts]        = lc
-                self._in_emb_lc[ts]    = bptc.encode_emblc(lc)
-                self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
-                self._in_stream_id[ts] = self._in_stream_ctr
+                self._in_lc[ts]            = lc
+                self._in_emb_lc[ts]        = bptc.encode_emblc(lc)
+                self._in_hbp_stream_id[ts] = hbp_stream
+                self._in_stream_ctr        = (self._in_stream_ctr + 1) & 0xFF
+                self._in_stream_id[ts]     = self._in_stream_ctr
                 log.info('HBP late entry: ts=%d src=%d tg=%d — LC from stream, hbp_stream=%s',
                          ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
                          hbp_stream.hex())
@@ -458,8 +545,9 @@ class CallTranslator:
             log.info('HBP call end:   src=%d  tg=%d  ts=%d  stream=%s',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
                      hbp_stream.hex())
-            self._in_lc[ts]     = None
-            self._in_emb_lc[ts] = None
+            self._in_lc[ts]            = None
+            self._in_emb_lc[ts]        = None
+            self._in_hbp_stream_id[ts] = None
         else:
             log.debug('← IPSC GV  burst=0x%02x  ts=%d  dtype=%d', slot_burst, ts, dtype)
 
@@ -499,9 +587,10 @@ class CallTranslator:
                         'IPSC→HBP call timeout: ts=%d stream=%s — no voice for %.1fs, clearing',
                         ts, self._out_stream_id[ts].hex(), elapsed,
                     )
-                    self._out_stream_id[ts] = None
-                    self._out_lc[ts]        = None
-                    self._out_emb_lc[ts]    = None
+                    self._out_stream_id[ts]      = None
+                    self._out_ipsc_stream_id[ts] = None
+                    self._out_lc[ts]             = None
+                    self._out_emb_lc[ts]         = None
             if self._in_lc[ts] is not None:
                 elapsed = now - self._in_last_pkt[ts]
                 if elapsed > timeout:
@@ -509,8 +598,9 @@ class CallTranslator:
                         'HBP→IPSC call timeout: ts=%d — no voice for %.1fs, clearing',
                         ts, elapsed,
                     )
-                    self._in_lc[ts]     = None
-                    self._in_emb_lc[ts] = None
+                    self._in_lc[ts]            = None
+                    self._in_emb_lc[ts]        = None
+                    self._in_hbp_stream_id[ts] = None
 
     # ------------------------------------------------------------------
     # Status queries

@@ -87,6 +87,7 @@ Config format is **TOML** (Python 3.11+ `tomllib`). The config file is validated
 - `auth_enabled` — boolean; enables HMAC-SHA1 packet authentication
 - `auth_key` — hex string, up to 40 hex chars (20 bytes); shorter keys are left-zero-padded
 - `keepalive_watchdog` — seconds without keepalive before declaring peer lost (minimum 5)
+- `ts_prefer_call_info` — boolean (default `false`). When `true`, ipsc2hbp uses call_info byte 17 to determine the timeslot for all burst types, including SLOT_VOICE. Set this only when IPSC traffic passes through **DMRlink confbridge.py** for timeslot translation: confbridge rewrites call_info (byte 17) correctly but does not rewrite burst_type (byte 30), so the two TS fields disagree. The default (`false`) uses burst_type bit 7 for SLOT_VOICE, which is the protocol-correct source on real Motorola hardware, and logs a WARNING once per session per affected TS when the two fields disagree. Remove or set `false` once confbridge is patched to rewrite both fields.
 
 **`[hbp]`**
 - `master_ip`, `master_port` — upstream HBP server address
@@ -231,14 +232,16 @@ Minimum accepted length: **31 bytes** (must be long enough to read burst_type at
 
 ### 4.7 Burst Data Types
 
-The burst data type byte encodes both the frame type and, for voice bursts, the timeslot:
+The burst data type byte encodes both the frame type and, for voice bursts, the timeslot. All GROUP_VOICE packets also carry a redundant TS indicator in call_info byte 17 bit 5; the two sources are always consistent on real Motorola hardware.
 
 | Value | Name | Timeslot determination |
 |-------|------|----------------------|
-| `0x01` | VOICE_HEAD | From call_info byte 17, bit 5 |
-| `0x02` | VOICE_TERM | From call_info byte 17, bit 5 |
-| `0x0A` | SLOT1_VOICE | Implied by value (bit 7 = 0) |
-| `0x8A` | SLOT2_VOICE | Implied by value (bit 7 = 1) |
+| `0x01` | VOICE_HEAD | call_info byte 17, bit 5 (burst_type value is TS-neutral) |
+| `0x02` | VOICE_TERM | call_info byte 17, bit 5 (burst_type value is TS-neutral) |
+| `0x0A` | SLOT1_VOICE | burst_type bit 7 = 0 (also: call_info bit 5 = 0) |
+| `0x8A` | SLOT2_VOICE | burst_type bit 7 = 1 (also: call_info bit 5 = 1) |
+
+**Note on DMRlink confbridge.py:** confbridge rewrites call_info (byte 17) when translating between timeslots but does not rewrite burst_type (byte 30). On confbridge-sourced traffic, SLOT_VOICE packets will have call_info and burst_type pointing to different timeslots. See `ts_prefer_call_info` in section 3 and the TOML config for the workaround.
 
 ---
 
@@ -574,6 +577,10 @@ All BPTC encoding, LC handling, and AMBE conversion goes through `dmr_utils3`. N
 | HBP call start (VOICE_HEAD from network) | INFO |
 | HBP call end (VOICE_TERM from network) | INFO |
 | SLOT_VOICE too short for AMBE | WARNING |
+| TS mismatch: burst_type and call_info disagree (first occurrence per session per TS) | WARNING |
+| TS mismatch: subsequent occurrences after initial warning | DEBUG |
+| IPSC stream ID changed on active TS without VOICE_TERM (outbound) | WARNING |
+| HBP stream ID changed on active TS without VOICE_TERM (inbound) | WARNING |
 | Individual voice burst (SLOT_VOICE/DMRD) | DEBUG |
 | XCMP/XNL received | DEBUG |
 | PEER_LIST_REQ | DEBUG |

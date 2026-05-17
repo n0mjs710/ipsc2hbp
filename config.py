@@ -29,6 +29,9 @@ class Config:
     ipsc_flags_bytes: bytes   # 4 bytes — FLAGS field in all IPSC management packets
     ipsc_version:     bytes   # 4 bytes — IPSC version field
 
+    # [ipsc] — call stream handling
+    ipsc_ts_prefer_call_info: bool  # see ts_prefer_call_info in toml
+
     # [hbp]
     hbp_master_ip: str
     hbp_master_port: int
@@ -144,8 +147,9 @@ def load(path: str) -> Config:
             except OSError:
                 errors.append(f'[ipsc] allowed_peer_ips: not a valid IPv4 address: {v!r}')
 
-    auth_enabled       = get_bool('ipsc', 'auth_enabled')
-    keepalive_watchdog = get_int('ipsc', 'keepalive_watchdog', min_val=5)
+    auth_enabled              = get_bool('ipsc', 'auth_enabled')
+    keepalive_watchdog        = get_int('ipsc',  'keepalive_watchdog', min_val=5)
+    ipsc_ts_prefer_call_info  = get_bool('ipsc', 'ts_prefer_call_info', required=False, default=False)
 
     auth_key = b'\x00' * 20
     if auth_enabled:
@@ -308,6 +312,7 @@ def load(path: str) -> Config:
         auth_enabled=auth_enabled,
         auth_key=auth_key,
         keepalive_watchdog=keepalive_watchdog,
+        ipsc_ts_prefer_call_info=ipsc_ts_prefer_call_info,
         ipsc_mode_byte=ipsc_mode_byte,
         ipsc_flags_bytes=ipsc_flags_bytes,
         ipsc_version=ipsc_version,

@@ -31,7 +31,7 @@ TS_CALL_MSK  = 0b00100000   # bit 5 of call_info → TS2
 END_MSK      = 0b01000000   # bit 6 of call_info → call end
 
 GV_PEER_ID_OFF    = 1
-GV_IPSC_SEQ_OFF   = 5
+GV_CALL_SEQ_OFF   = 5
 GV_SRC_SUB_OFF    = 6
 GV_DST_GROUP_OFF  = 9
 GV_CALL_INFO_OFF  = 17
@@ -338,7 +338,7 @@ def decode_packet(data: bytes, frame_num: int, direction: str, peer_ip: str,
         return
 
     peer_id    = _id4(data[GV_PEER_ID_OFF : GV_PEER_ID_OFF + 4])
-    stream_id  = data[GV_IPSC_SEQ_OFF]
+    stream_id  = data[GV_CALL_SEQ_OFF]
     src        = _id3(data[GV_SRC_SUB_OFF  : GV_SRC_SUB_OFF  + 3])
     dst        = _id3(data[GV_DST_GROUP_OFF : GV_DST_GROUP_OFF + 3])
     call_info  = data[GV_CALL_INFO_OFF]
