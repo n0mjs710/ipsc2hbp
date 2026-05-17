@@ -378,8 +378,9 @@ class CallTranslator:
         log.debug('→ HBP DMRD  burst=0x%02x  ts=%d  flags=0x%02x', burst_type, ts, flags)
 
         if burst_type == VOICE_TERM:
-            log.info('IPSC call end:   src=%d  tg=%d  ts=%d',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts)
+            log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
+                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                     self._out_stream_id[ts].hex(), self._out_ipsc_stream_id[ts])
             self._out_stream_id[ts]      = None
             self._out_ipsc_stream_id[ts] = None
             self._out_lc[ts]             = None
@@ -538,13 +539,13 @@ class CallTranslator:
         )
 
         if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
-            log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s',
+            log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
-                     hbp_stream.hex())
+                     hbp_stream.hex(), self._in_stream_id[ts])
         elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
-            log.info('HBP call end:   src=%d  tg=%d  ts=%d  stream=%s',
+            log.info('HBP call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
-                     hbp_stream.hex())
+                     hbp_stream.hex(), self._in_stream_id[ts])
             self._in_lc[ts]            = None
             self._in_emb_lc[ts]        = None
             self._in_hbp_stream_id[ts] = None
