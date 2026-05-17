@@ -5,7 +5,7 @@
 **PURPOSE:** A single, small Python 3 daemon that connects a Motorola MOTOTRBO IPSC system to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
 
 Two IPSC modes are supported:
-- **MASTER** (default) — ipsc2hbp acts as the IPSC master; up to 14 MOTOTRBO repeaters register with it as peers.
+- **MASTER** (default) — ipsc2hbp acts as the IPSC master; up to 14 MOTOTRBO repeaters register with it as peers. Remote CPS programming in Master mode on the way.
 - **PEER** — ipsc2hbp registers with an existing IPSC master (e.g. a repeater configured as master). All traffic on that IPSC system is forwarded to HBP.
 
 **WHY THIS EXISTS:**
