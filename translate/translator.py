@@ -172,8 +172,9 @@ class CallTranslator:
         self._in_stream_id     = {1: 0, 2: 0}        # byte 5: call stream ID, constant per call
         self._in_stream_ctr    = 0                   # increments once per call (shared across TS)
         self._in_hbp_stream_id = {1: None, 2: None}  # 4-byte HBP stream ID of active inbound call
-        self._in_rtp_seq       = {1: 0, 2: 0}        # RTP sequence in GV header
-        self._in_rtp_ts        = {1: 0, 2: 0}        # RTP timestamp; increments 480/frame
+        self._in_rtp_seq        = {1: 0,   2: 0}    # RTP sequence; increments per sent packet
+        self._in_rtp_ts         = {1: 0,   2: 0}    # RTP timestamp; wall-clock driven (24 kHz)
+        self._in_rtp_ts_time    = {1: 0.0, 2: 0.0}  # wall-clock time of last _in_rtp_ts update
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
         self._out_last_pkt  = {1: 0.0, 2: 0.0}
@@ -208,6 +209,7 @@ class CallTranslator:
         self._in_stream_id           = {1: 0, 2: 0}
         self._in_hbp_stream_id       = {1: None, 2: None}
         self._in_last_pkt            = {1: 0.0, 2: 0.0}
+        self._in_rtp_ts_time         = {1: 0.0, 2: 0.0}
         self._peer_call_type         = b'\x02'
         self._peer_call_ctrl         = b'\x00\x00\x43\xe2'
         if self._cfg.hbp_mode == 'TRACKING':
@@ -414,6 +416,7 @@ class CallTranslator:
         self._in_stream_id           = {1: 0, 2: 0}
         self._in_hbp_stream_id       = {1: None, 2: None}
         self._in_last_pkt            = {1: 0.0, 2: 0.0}
+        self._in_rtp_ts_time         = {1: 0.0, 2: 0.0}
 
     def hbp_voice_received(self, dmrd: bytes):
         """Inbound HBP → IPSC."""
@@ -476,6 +479,7 @@ class CallTranslator:
                 self._in_lc[ts]            = None
                 self._in_emb_lc[ts]        = None
                 self._in_hbp_stream_id[ts] = None
+                self._in_rtp_ts_time[ts]   = 0.0
 
             if self._in_lc[ts] is None:
                 # Late entry: src_sub and dst_group are in every DMRD header so we
@@ -530,9 +534,12 @@ class CallTranslator:
             rtp_pt = 0x5d
 
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
-        rtp_ts_b  = struct.pack('>I', self._in_rtp_ts[ts]  & 0xFFFFFFFF)
+        now = self._in_last_pkt[ts]
+        if self._in_rtp_ts_time[ts] > 0.0:
+            self._in_rtp_ts[ts] = (self._in_rtp_ts[ts] + round((now - self._in_rtp_ts_time[ts]) * 24000)) & 0xFFFFFFFF
+        self._in_rtp_ts_time[ts] = now
+        rtp_ts_b = struct.pack('>I', self._in_rtp_ts[ts])
         self._in_rtp_seq[ts] += 1
-        self._in_rtp_ts[ts]  += 480
         rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
         self._ipsc.send_voice(
             self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
@@ -549,6 +556,7 @@ class CallTranslator:
             self._in_lc[ts]            = None
             self._in_emb_lc[ts]        = None
             self._in_hbp_stream_id[ts] = None
+            self._in_rtp_ts_time[ts]   = 0.0
         else:
             log.debug('← IPSC GV  burst=0x%02x  ts=%d  dtype=%d', slot_burst, ts, dtype)
 
@@ -602,6 +610,7 @@ class CallTranslator:
                     self._in_lc[ts]            = None
                     self._in_emb_lc[ts]        = None
                     self._in_hbp_stream_id[ts] = None
+                    self._in_rtp_ts_time[ts]   = 0.0
 
     # ------------------------------------------------------------------
     # Status queries
