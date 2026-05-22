@@ -173,7 +173,7 @@ class CallTranslator:
         self._in_stream_ctr    = 0                   # increments once per call (shared across TS)
         self._in_hbp_stream_id = {1: None, 2: None}  # 4-byte HBP stream ID of active inbound call
         self._in_rtp_seq        = {1: 0,   2: 0}    # RTP sequence; increments per sent packet
-        self._in_rtp_ts         = {1: 0,   2: 0}    # RTP timestamp; wall-clock driven (24 kHz)
+        self._in_rtp_ts         = {1: 0,   2: 0}    # RTP timestamp; wall-clock driven (8 kHz)
         self._in_rtp_ts_time    = {1: 0.0, 2: 0.0}  # wall-clock time of last _in_rtp_ts update
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
@@ -550,7 +550,7 @@ class CallTranslator:
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
         now = self._in_last_pkt[ts]
         if self._in_rtp_ts_time[ts] > 0.0:
-            self._in_rtp_ts[ts] = (self._in_rtp_ts[ts] + round((now - self._in_rtp_ts_time[ts]) * 24000)) & 0xFFFFFFFF
+            self._in_rtp_ts[ts] = (self._in_rtp_ts[ts] + round((now - self._in_rtp_ts_time[ts]) * 8000)) & 0xFFFFFFFF
         self._in_rtp_ts_time[ts] = now
         rtp_ts_b = struct.pack('>I', self._in_rtp_ts[ts])
         self._in_rtp_seq[ts] += 1
