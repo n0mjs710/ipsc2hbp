@@ -432,11 +432,25 @@ class CallTranslator:
         payload_33  = dmrd[DMRD_PAYLOAD_OFF : DMRD_PAYLOAD_OFF + 33]
 
         ts         = 2 if (flags & HBPF_TGID_TS2) else 1
+        prev_pkt   = self._in_last_pkt[ts]
         self._in_last_pkt[ts] = time()
         frame_type = flags & HBPF_FRAMETYPE_MASK
         dtype      = flags & HBPF_DTYPE_MASK
         call_info  = TS_CALL_MSK if ts == 2 else 0x00
         slot_burst = SLOT2_VOICE if ts == 2 else SLOT1_VOICE
+
+        # Burst label for gap diagnostics: H=VOICE_HEAD, T=VOICE_TERM, A=VOICESYNC, B-F=voice
+        if frame_type == HBPF_FRAMETYPE_DATASYNC:
+            _bl = 'H' if dtype == HBPF_SLT_VHEAD else 'T'
+        elif frame_type == HBPF_FRAMETYPE_VOICESYNC:
+            _bl = 'A'
+        else:
+            _bl = 'ABCDEF'[min(dtype, 5)]
+        if prev_pkt > 0.0:
+            log.debug('← HBP  ts=%d  %s  gap=%.1fms', ts, _bl,
+                      (self._in_last_pkt[ts] - prev_pkt) * 1000)
+        else:
+            log.debug('← HBP  ts=%d  %s', ts, _bl)
 
         if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
             # Decode actual LC from the BPTC-encoded DMRD VOICE_HEAD payload.
@@ -557,8 +571,6 @@ class CallTranslator:
             self._in_emb_lc[ts]        = None
             self._in_hbp_stream_id[ts] = None
             self._in_rtp_ts_time[ts]   = 0.0
-        else:
-            log.debug('← IPSC GV  burst=0x%02x  ts=%d  dtype=%d', slot_burst, ts, dtype)
 
     def _build_gv(self, src_sub, dst_group, call_info, rtp_hdr, gv_payload, stream_id: int) -> bytes:
         """Assemble a complete GROUP_VOICE packet."""
