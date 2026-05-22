@@ -177,8 +177,9 @@ class CallTranslator:
         self._in_rtp_ts_time    = {1: 0.0, 2: 0.0}  # wall-clock time of last _in_rtp_ts update
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
-        self._out_last_pkt  = {1: 0.0, 2: 0.0}
-        self._in_last_pkt   = {1: 0.0, 2: 0.0}
+        self._out_last_pkt    = {1: 0.0,  2: 0.0}
+        self._in_last_pkt     = {1: 0.0,  2: 0.0}
+        self._out_last_rtp_ts = {1: None, 2: None}  # last RTP ts from IPSC, for gap diagnostics
 
         # Call metadata learned from the IPSC peer and echoed back inbound
         self._peer_call_type = b'\x02'               # group voice (Motorola default)
@@ -202,7 +203,8 @@ class CallTranslator:
         self._out_ipsc_stream_id     = {1: None, 2: None}
         self._out_lc                 = {1: None, 2: None}
         self._out_emb_lc             = {1: None, 2: None}
-        self._out_last_pkt           = {1: 0.0, 2: 0.0}
+        self._out_last_pkt           = {1: 0.0,  2: 0.0}
+        self._out_last_rtp_ts        = {1: None, 2: None}
         self._out_ts_mismatch_warned = {1: False, 2: False}
         self._in_lc                  = {1: None, 2: None}
         self._in_emb_lc              = {1: None, 2: None}
@@ -245,7 +247,32 @@ class CallTranslator:
                 if self._cfg.ipsc_ts_prefer_call_info:
                     ts = ts_ci
 
-        self._out_last_pkt[ts] = time()
+        now      = time()
+        prev_wall = self._out_last_pkt[ts]
+        self._out_last_pkt[ts] = now
+
+        # Burst label: H/T for head/term; A-F for voice bursts (by superframe position)
+        if burst_type == VOICE_HEAD:
+            _ibl = 'H'
+        elif burst_type == VOICE_TERM:
+            _ibl = 'T'
+        else:
+            _ibl = 'ABCDEF'[self._out_frame_pos[ts] % 6]
+
+        # RTP timestamp is at bytes 22-25 of every IPSC GROUP_VOICE
+        _rtp_now = struct.unpack('>I', data[22:26])[0] if len(data) >= 26 else None
+        if prev_wall > 0.0:
+            _gap_ms = (now - prev_wall) * 1000
+            _prev_rtp = self._out_last_rtp_ts[ts]
+            if _rtp_now is not None and _prev_rtp is not None:
+                _rtp_delta = (_rtp_now - _prev_rtp) & 0xFFFFFFFF
+                log.debug('← IPSC ts=%d  %s  gap=%.1fms  rtp_Δ=%d', ts, _ibl, _gap_ms, _rtp_delta)
+            else:
+                log.debug('← IPSC ts=%d  %s  gap=%.1fms', ts, _ibl, _gap_ms)
+        else:
+            log.debug('← IPSC ts=%d  %s', ts, _ibl)
+        if _rtp_now is not None:
+            self._out_last_rtp_ts[ts] = _rtp_now
 
         src_sub   = data[GV_SRC_SUB_OFF   : GV_SRC_SUB_OFF   + 3]
         dst_group = data[GV_DST_GROUP_OFF  : GV_DST_GROUP_OFF + 3]
@@ -409,7 +436,8 @@ class CallTranslator:
         self._out_ipsc_stream_id     = {1: None, 2: None}
         self._out_lc                 = {1: None, 2: None}
         self._out_emb_lc             = {1: None, 2: None}
-        self._out_last_pkt           = {1: 0.0, 2: 0.0}
+        self._out_last_pkt           = {1: 0.0,  2: 0.0}
+        self._out_last_rtp_ts        = {1: None, 2: None}
         self._out_ts_mismatch_warned = {1: False, 2: False}
         self._in_lc                  = {1: None, 2: None}
         self._in_emb_lc              = {1: None, 2: None}
