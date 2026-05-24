@@ -438,7 +438,6 @@ class CallTranslator:
         )
         self._out_seq = (self._out_seq + 1) & 0xFF
         self._hbp.send_dmrd(dmrd)
-        log.debug('→ HBP DMRD  burst=0x%02x  ts=%d  flags=0x%02x', burst_type, ts, flags)
 
         if burst_type == VOICE_TERM:
             log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
