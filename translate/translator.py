@@ -610,15 +610,22 @@ class CallTranslator:
             frame_bits.frombytes(payload_33)
             bptc_bits = frame_bits[0:98] + frame_bits[166:264]   # 196-bit BPTC only
             lc = bptc.decode_full_lc(bptc_bits).tobytes()
-            self._in_lc[ts]         = lc
-            self._in_emb_lc[ts]     = bptc.encode_emblc(lc)
-            self._in_hbp_stream_id[ts] = hbp_stream
-            # Assign a new stream ID for this call — byte 5 in GROUP_VOICE is a
-            # per-call constant (stream identifier), not a per-packet counter.
-            # Real Motorola equipment uses the same value for every packet of a call.
-            self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
-            self._in_stream_id[ts] = self._in_stream_ctr
-            self._start_synth_timer(ts, 0)   # first voice burst (A) expected in ~60 ms
+            self._in_lc[ts]     = lc
+            self._in_emb_lc[ts] = bptc.encode_emblc(lc)
+            if hbp_stream == self._in_hbp_stream_id[ts]:
+                # Duplicate VOICE_HEAD — Motorola radios send 2-3 to ensure LC delivery.
+                # Forward it (receiver may have missed the first) but reuse the existing
+                # stream ID so the repeater sees one continuous call, not a new one.
+                log.debug('Duplicate VOICE_HEAD ts=%d stream=%s — forwarding, reusing stream_id=0x%02x',
+                          ts, hbp_stream.hex(), self._in_stream_id[ts])
+            else:
+                # New call — assign a fresh stream ID and log the call start.
+                self._in_hbp_stream_id[ts] = hbp_stream
+                self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
+                self._in_stream_id[ts] = self._in_stream_ctr
+                log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
+                         int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                         hbp_stream.hex(), self._in_stream_id[ts])
             gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(lc, VOICE_HEAD)
             rtp_pt = 0xdd  # M=1 (call-start marker)
 
@@ -696,11 +703,7 @@ class CallTranslator:
             self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
         )
 
-        if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VHEAD:
-            log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
-                     hbp_stream.hex(), self._in_stream_id[ts])
-        elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
+        if frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
             log.info('HBP call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                      int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
                      hbp_stream.hex(), self._in_stream_id[ts])
