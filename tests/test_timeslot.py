@@ -16,6 +16,7 @@ Run with:
     python -m unittest tests.test_timeslot -v
 """
 
+import asyncio
 import os
 import sys
 import unittest
@@ -204,6 +205,9 @@ _cfg = None
 def setUpModule():
     global _cfg
     _cfg = load_config(_CFG_PATH)
+    # Tests call translator methods that use asyncio timers; a non-running event
+    # loop satisfies get_event_loop() so call_at() can queue handles safely.
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 def _make_tr():
@@ -374,15 +378,20 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         self.assertEqual(tr._in_rtp_seq[1], 3)
         self.assertEqual(tr._in_rtp_seq[2], 1)
 
-    def test_rtp_ts_tracked_per_ts(self):
+    @patch('translate.translator.time')
+    def test_rtp_ts_tracked_per_ts(self, mock_time):
+        # Simulate packets arriving 60 ms apart (one per TDMA slot).
+        # time() is called once per hbp_voice_received invocation.
+        # Use non-zero base so the rtp_ts_time > 0.0 guard works after first packet.
+        mock_time.side_effect = [1000.000, 1000.060, 1000.120]
         tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        tr.hbp_voice_received(_dmrd_head(ts=2))
-        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        # TS1: 2 packets at 480/packet = 960 total
+        tr.hbp_voice_received(_dmrd_head(ts=1))   # t=1000.000 → no increment (first pkt on TS1)
+        tr.hbp_voice_received(_dmrd_head(ts=2))   # t=1000.060 → no increment (first pkt on TS2)
+        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))  # t=1000.120 → elapsed=120ms→960 ticks
+        # TS1: HEAD sets ts_time=1000.0; SLOT_VOICE 120 ms later → +round(0.120*8000)=960 ticks
         self.assertEqual(tr._in_rtp_ts[1], 960)
-        # TS2: 1 packet = 480 total
-        self.assertEqual(tr._in_rtp_ts[2], 480)
+        # TS2: only one VOICE_HEAD → first-packet, ts_time init=0.0 → no increment yet
+        self.assertEqual(tr._in_rtp_ts[2], 0)
 
 
 # ===========================================================================
