@@ -47,7 +47,7 @@ from dmr_utils3.ambe_utils import convert49BitTo72BitAMBE, convert72BitTo49BitAM
 from dmr_utils3.const import EMB, SLOT_TYPE, BS_VOICE_SYNC, BS_DATA_SYNC, LC_OPT
 
 from config import Config
-from translate.const import BURST_LATE_WINDOW, MAX_SYNTH_BURSTS
+from translate.const import JITTER_BUFFER_DEPTH, MAX_SYNTH_BURSTS
 from ipsc.const import (
     GROUP_VOICE,
     VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE,
@@ -190,8 +190,7 @@ class CallTranslator:
         self._in_stream_ctr    = 0                   # increments once per call (shared across TS)
         self._in_hbp_stream_id = {1: None, 2: None}  # 4-byte HBP stream ID of active inbound call
         self._in_rtp_seq        = {1: 0,   2: 0}    # RTP sequence; increments per sent packet
-        self._in_rtp_ts         = {1: 0,   2: 0}    # RTP timestamp; wall-clock driven (8 kHz)
-        self._in_rtp_ts_time    = {1: 0.0, 2: 0.0}  # wall-clock time of last _in_rtp_ts update
+        self._in_rtp_ts         = {1: 0,   2: 0}    # RTP timestamp; +480 per delivered slot (8 kHz × 60 ms)
 
         # Last-packet timestamps for hung-call detection (seconds since epoch)
         self._out_last_pkt    = {1: 0.0,  2: 0.0}
@@ -202,11 +201,12 @@ class CallTranslator:
         self._peer_call_type = b'\x02'               # group voice (Motorola default)
         self._peer_call_ctrl = b'\x00\x00\x43\xe2'  # Motorola repeater default
 
-        # Inbound silence synthesis state (HBP → IPSC) — keyed by timeslot
-        self._in_next_slot_time = {1: 0.0,  2: 0.0}   # monotonic abs time of next expected slot
-        self._in_burst_pos      = {1: 0,    2: 0}      # next burst to synthesize (0-5 = A-F)
-        self._in_consec_synth   = {1: 0,    2: 0}      # consecutive synthesized bursts
-        self._in_synth_timer    = {1: None, 2: None}   # asyncio.TimerHandle
+        # Inbound jitter buffer + delivery state (HBP → IPSC) — keyed by timeslot
+        self._in_buf            = {1: {},   2: {}}     # pos (0-5) → ambe_19 bytes; filled on receive
+        self._in_next_slot_time = {1: 0.0,  2: 0.0}   # monotonic abs time of next delivery; 0.0 = idle
+        self._in_burst_pos      = {1: 0,    2: 0}      # superframe position of next delivery (0-5 = A-F)
+        self._in_consec_synth   = {1: 0,    2: 0}      # consecutive synthesized (empty-slot) deliveries
+        self._in_delivery_timer = {1: None, 2: None}   # asyncio.TimerHandle
 
     def set_protocols(self, ipsc_proto, hbp_client):
         self._ipsc = ipsc_proto
@@ -223,8 +223,8 @@ class CallTranslator:
     def _init_call_state(self):
         """Re-initialize all per-call state to starting values; called on connection loss."""
         for ts in (1, 2):
-            if self._in_synth_timer[ts] is not None:
-                self._in_synth_timer[ts].cancel()
+            if self._in_delivery_timer[ts] is not None:
+                self._in_delivery_timer[ts].cancel()
         self._out_stream_id          = {1: None, 2: None}
         self._out_ipsc_stream_id     = {1: None, 2: None}
         self._out_lc                 = {1: None, 2: None}
@@ -237,11 +237,11 @@ class CallTranslator:
         self._in_stream_id           = {1: 0, 2: 0}
         self._in_hbp_stream_id       = {1: None, 2: None}
         self._in_last_pkt            = {1: 0.0,  2: 0.0}
-        self._in_rtp_ts_time         = {1: 0.0,  2: 0.0}
+        self._in_buf                 = {1: {},   2: {}}
         self._in_next_slot_time      = {1: 0.0,  2: 0.0}
         self._in_burst_pos           = {1: 0,    2: 0}
         self._in_consec_synth        = {1: 0,    2: 0}
-        self._in_synth_timer         = {1: None, 2: None}
+        self._in_delivery_timer      = {1: None, 2: None}
 
     def peer_lost(self):
         log.warning('IPSC peer lost')
@@ -467,47 +467,56 @@ class CallTranslator:
         log.warning('HBP disconnected')
         self._init_call_state()
 
-    def _cancel_synth_timer(self, ts: int):
-        if self._in_synth_timer[ts] is not None:
-            self._in_synth_timer[ts].cancel()
-            self._in_synth_timer[ts] = None
+    def _cancel_delivery_timer(self, ts: int):
+        if self._in_delivery_timer[ts] is not None:
+            self._in_delivery_timer[ts].cancel()
+            self._in_delivery_timer[ts] = None
 
-    def _arm_synth_timer(self, ts: int):
-        """Queue the next synthesis callback at _in_next_slot_time + BURST_LATE_WINDOW."""
+    def _arm_delivery_timer(self, ts: int):
+        """Schedule the next delivery at _in_next_slot_time (exact TDMA cadence, no fudge window)."""
         loop = asyncio.get_event_loop()
-        self._in_synth_timer[ts] = loop.call_at(
-            self._in_next_slot_time[ts] + BURST_LATE_WINDOW,
-            self._synthesis_timer_cb, ts,
+        self._in_delivery_timer[ts] = loop.call_at(
+            self._in_next_slot_time[ts],
+            self._delivery_timer_cb, ts,
         )
 
-    def _start_synth_timer(self, ts: int, burst_pos: int):
-        """Cancel any pending timer, anchor TDMA clock to now+60 ms, arm synthesis."""
-        self._cancel_synth_timer(ts)
-        self._in_burst_pos[ts]      = burst_pos
-        self._in_next_slot_time[ts] = asyncio.get_event_loop().time() + 0.060
+    def _start_delivery_clock(self, ts: int):
+        """Begin a new delivery clock with JITTER_BUFFER_DEPTH slots of initial delay."""
+        self._cancel_delivery_timer(ts)
+        self._in_buf[ts].clear()
+        self._in_burst_pos[ts]      = 0
         self._in_consec_synth[ts]   = 0
-        self._arm_synth_timer(ts)
+        self._in_next_slot_time[ts] = asyncio.get_event_loop().time() + JITTER_BUFFER_DEPTH * 0.060
+        self._arm_delivery_timer(ts)
 
-    def _synthesis_timer_cb(self, ts: int):
-        self._in_synth_timer[ts] = None
+    def _delivery_timer_cb(self, ts: int):
+        self._in_delivery_timer[ts] = None
         if self._in_lc[ts] is None or not self._ipsc.has_peers():
             return
-        self._synthesize_silence(ts)
+        self._deliver_slot(ts)
 
-    def _synthesize_silence(self, ts: int):
-        """Send one AMBE-silence filler burst and schedule the next synthesis timer."""
-        pos       = self._in_burst_pos[ts]
+    def _deliver_slot(self, ts: int):
+        """Deliver one slot: real AMBE from buffer if available, AMBE silence otherwise."""
+        pos     = self._in_burst_pos[ts]
+        ambe_19 = self._in_buf[ts].pop(pos, None)
+
+        if ambe_19 is None:
+            ambe_19 = _AMBE_SILENCE_IPSC
+            self._in_consec_synth[ts] += 1
+            log.debug('↑ SYNTH  ts=%d  %s  consec=%d', ts, 'ABCDEF'[pos], self._in_consec_synth[ts])
+            if self._in_consec_synth[ts] >= MAX_SYNTH_BURSTS:
+                self._on_stream_timeout(ts)
+                return
+        else:
+            self._in_consec_synth[ts] = 0
+
         lc        = self._in_lc[ts]
         call_info = TS_CALL_MSK if ts == 2 else 0x00
         dst_group = lc[3:6]
         src_sub   = lc[6:9]
-        gv_payload = self._build_slot_voice_payload(ts, pos, _AMBE_SILENCE_IPSC)
 
-        # Fixed +480-tick advance (8 kHz × 60 ms); set ts_time to nominal slot wall time
-        # so the next real packet's wall-clock delta aligns correctly with the TDMA cadence.
-        now = time()
-        self._in_rtp_ts[ts]      = (self._in_rtp_ts[ts] + 480) & 0xFFFFFFFF
-        self._in_rtp_ts_time[ts] = now - BURST_LATE_WINDOW
+        gv_payload = self._build_slot_voice_payload(ts, pos, ambe_19)
+        self._in_rtp_ts[ts]  = (self._in_rtp_ts[ts] + 480) & 0xFFFFFFFF
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
         rtp_ts_b  = struct.pack('>I', self._in_rtp_ts[ts])
         self._in_rtp_seq[ts] += 1
@@ -516,35 +525,36 @@ class CallTranslator:
         self._ipsc.send_voice(
             self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
         )
-        log.debug('↑ SYNTH  ts=%d  %s  consec=%d', ts, 'ABCDEF'[pos], self._in_consec_synth[ts] + 1)
 
         self._in_burst_pos[ts]       = (pos + 1) % 6
-        self._in_consec_synth[ts]   += 1
         self._in_next_slot_time[ts] += 0.060
-
-        if self._in_consec_synth[ts] >= MAX_SYNTH_BURSTS:
-            self._on_stream_timeout(ts)
-            return
-
-        self._arm_synth_timer(ts)
+        self._arm_delivery_timer(ts)
 
     def _on_stream_timeout(self, ts: int):
-        """Called after MAX_SYNTH_BURSTS consecutive silence frames.  Phase 2 hook: send VOICE_TERM."""
-        log.warning('HBP→IPSC stream timeout ts=%d: %d consecutive silence bursts, stream considered dead',
+        """Called after MAX_SYNTH_BURSTS consecutive empty slots — synthesize VOICE_TERM and end call."""
+        log.warning('HBP→IPSC stream timeout ts=%d: %d consecutive silence bursts — synthesizing VOICE_TERM',
                     ts, MAX_SYNTH_BURSTS)
-        # Phase 2 placeholder: synthesize and send VOICE_TERM before clearing state
+        lc        = self._in_lc[ts]
+        call_info = (TS_CALL_MSK if ts == 2 else 0x00) | END_MSK
+        dst_group = lc[3:6]
+        src_sub   = lc[6:9]
+        gv_payload = bytes([VOICE_TERM]) + _build_ipsc_voice_payload(lc, VOICE_TERM)
+        rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
+        rtp_ts_b  = struct.pack('>I', self._in_rtp_ts[ts])
+        self._in_rtp_seq[ts] += 1
+        rtp_hdr = b'\x80\x5e' + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
+        self._ipsc.send_voice(
+            self._build_gv(src_sub, dst_group, call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
+        )
+        # Clear all state — call is fully terminated; next HBP traffic starts a fresh call.
+        self._in_buf[ts].clear()
         self._in_next_slot_time[ts] = 0.0
         self._in_burst_pos[ts]      = 0
         self._in_consec_synth[ts]   = 0
-        self._in_synth_timer[ts]    = None
+        self._in_delivery_timer[ts] = None
         self._in_hbp_stream_id[ts]  = None
-        self._in_rtp_ts_time[ts]    = 0.0
-        # _in_lc and _in_emb_lc intentionally preserved for Phase 3 resume detection
-
-    def _on_stream_resume_without_header(self, ts: int):
-        """Called when HBP traffic resumes after timeout without a VOICE_HEAD.  Phase 3 hook."""
-        # Phase 3 placeholder: synthesize VOICE_HEAD from self._in_lc[ts] before forwarding
-        log.info('HBP→IPSC stream resumed ts=%d without VOICE_HEAD — continuing with cached LC', ts)
+        self._in_lc[ts]             = None
+        self._in_emb_lc[ts]         = None
 
     def _build_slot_voice_payload(self, ts: int, pos: int, ambe_19: bytes) -> bytes:
         """Build the IPSC GROUP_VOICE payload for one SLOT_VOICE burst (any burst type)."""
@@ -616,13 +626,15 @@ class CallTranslator:
                 # Duplicate VOICE_HEAD — Motorola radios send 2-3 to ensure LC delivery.
                 # Forward it (receiver may have missed the first) but reuse the existing
                 # stream ID so the repeater sees one continuous call, not a new one.
+                # Do NOT restart the delivery clock — that would drop buffered voice bursts.
                 log.debug('Duplicate VOICE_HEAD ts=%d stream=%s — forwarding, reusing stream_id=0x%02x',
                           ts, hbp_stream.hex(), self._in_stream_id[ts])
             else:
-                # New call — assign a fresh stream ID and log the call start.
+                # New call — assign a fresh stream ID, log, and start the delivery clock.
                 self._in_hbp_stream_id[ts] = hbp_stream
                 self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
                 self._in_stream_id[ts] = self._in_stream_ctr
+                self._start_delivery_clock(ts)
                 log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
                          hbp_stream.hex(), self._in_stream_id[ts])
@@ -632,7 +644,8 @@ class CallTranslator:
         elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
             lc = self._in_lc[ts] if self._in_lc[ts] else LC_OPT + dst_group + src_sub
             call_info |= END_MSK
-            self._cancel_synth_timer(ts)
+            self._cancel_delivery_timer(ts)
+            self._in_buf[ts].clear()
             self._in_next_slot_time[ts] = 0.0
             self._in_burst_pos[ts]      = 0
             self._in_consec_synth[ts]   = 0
@@ -671,12 +684,7 @@ class CallTranslator:
                 log.info('HBP late entry: ts=%d src=%d tg=%d — LC from stream, hbp_stream=%s',
                          ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
                          hbp_stream.hex())
-            elif self._in_hbp_stream_id[ts] is None:
-                # Resume after synthesis timeout: LC preserved but stream ID was cleared.
-                self._in_hbp_stream_id[ts] = hbp_stream
-                self._on_stream_resume_without_header(ts)
-
-            # Determine burst position, arm synthesis timer, build payload
+            # Determine burst position and buffer the AMBE payload
             if frame_type == HBPF_FRAMETYPE_VOICESYNC:
                 cur_pos = 0
             elif dtype == 4:
@@ -685,18 +693,20 @@ class CallTranslator:
                 cur_pos = 5
             else:
                 cur_pos = max(dtype, 1)   # dtype 0→B(1), 1→B(1), 2→C(2), 3→D(3)
-            self._start_synth_timer(ts, (cur_pos + 1) % 6)
 
-            ambe_19    = _extract_ambe_from_dmrd(payload_33)
-            gv_payload = self._build_slot_voice_payload(ts, cur_pos, ambe_19)
-            rtp_pt = 0x5d
+            self._in_buf[ts][cur_pos] = _extract_ambe_from_dmrd(payload_33)
 
+            # Arm delivery clock if idle (late entry or resume after timeout)
+            if self._in_delivery_timer[ts] is None and self._in_next_slot_time[ts] == 0.0:
+                self._in_burst_pos[ts]      = cur_pos
+                self._in_consec_synth[ts]   = 0
+                self._in_next_slot_time[ts] = asyncio.get_event_loop().time() + JITTER_BUFFER_DEPTH * 0.060
+                self._arm_delivery_timer(ts)
+            return  # delivery timer sends; nothing more to do here
+
+        # Only VOICE_HEAD and VOICE_TERM reach here; voice bursts return early above.
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
-        now = self._in_last_pkt[ts]
-        if self._in_rtp_ts_time[ts] > 0.0:
-            self._in_rtp_ts[ts] = (self._in_rtp_ts[ts] + round((now - self._in_rtp_ts_time[ts]) * 8000)) & 0xFFFFFFFF
-        self._in_rtp_ts_time[ts] = now
-        rtp_ts_b = struct.pack('>I', self._in_rtp_ts[ts])
+        rtp_ts_b  = struct.pack('>I', self._in_rtp_ts[ts])
         self._in_rtp_seq[ts] += 1
         rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
         self._ipsc.send_voice(
@@ -710,7 +720,6 @@ class CallTranslator:
             self._in_lc[ts]            = None
             self._in_emb_lc[ts]        = None
             self._in_hbp_stream_id[ts] = None
-            self._in_rtp_ts_time[ts]   = 0.0
 
     def _build_gv(self, src_sub, dst_group, call_info, rtp_hdr, gv_payload, stream_id: int) -> bytes:
         """Assemble a complete GROUP_VOICE packet."""
@@ -759,11 +768,11 @@ class CallTranslator:
                         'HBP→IPSC call timeout: ts=%d — no voice for %.1fs, clearing',
                         ts, elapsed,
                     )
-                    self._cancel_synth_timer(ts)
+                    self._cancel_delivery_timer(ts)
+                    self._in_buf[ts].clear()
                     self._in_lc[ts]             = None
                     self._in_emb_lc[ts]         = None
                     self._in_hbp_stream_id[ts]  = None
-                    self._in_rtp_ts_time[ts]    = 0.0
                     self._in_next_slot_time[ts] = 0.0
                     self._in_burst_pos[ts]      = 0
                     self._in_consec_synth[ts]   = 0

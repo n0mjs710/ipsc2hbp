@@ -2,17 +2,17 @@
 # Translator timing constants — tune here, not in config.toml
 # ---------------------------------------------------------------------------
 
-# Seconds past the expected 60ms TDMA slot boundary before we declare a burst
-# missing and synthesize an AMBE-silence filler frame.  Must sit above the top
-# of observed HBP delivery jitter (measured: 50–72 ms inter-packet) to avoid
-# false-positive synthesis on bursts that are merely late, yet must be tight
-# enough that the filler reaches the repeater before its receive buffer
-# exhausts.  A real burst arriving after this window is discarded — its slot
-# has already been filled.
+# Number of 60 ms TDMA slots buffered before the first delivery to IPSC.
+# Incoming HBP bursts are held in a position-indexed dict; the delivery timer
+# fires every 60 ms and sends whatever is in the buffer (real AMBE) or
+# synthesises AMBE silence if the slot is empty.  The buffer depth sets the
+# maximum HBP delivery jitter that can be absorbed without synthesising:
 #
-# Value: 0.030 s → synthesis fires ~90 ms after the previous burst, i.e.
-# 30 ms past the nominal 60 ms slot boundary.
-BURST_LATE_WINDOW = 0.030   # seconds
+#   depth=2 → 120 ms lookahead; absorbs jitter up to 120 ms (observed: 50–72 ms)
+#
+# This also adds 120 ms of end-to-end latency, which is imperceptible on
+# half-duplex PTT radio (c-Bridge already adds 500 ms–2 s in typical configs).
+JITTER_BUFFER_DEPTH = 2     # slots (× 60 ms = 120 ms initial delay)
 
 # Maximum consecutive synthesized silence bursts before giving up on the
 # stream.  At 60 ms per burst this is the wall-clock holdoff before we

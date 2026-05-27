@@ -355,6 +355,7 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         tr, ipsc, _ = _make_tr()
         tr.hbp_voice_received(_dmrd_head(ts=1))
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
+        tr._deliver_slot(1)   # fire delivery timer manually
         self.assertEqual(len(ipsc.sent), 2)
 
     def test_ts1_and_ts2_bursts_all_delivered(self):
@@ -362,7 +363,9 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         tr.hbp_voice_received(_dmrd_head(ts=1))
         tr.hbp_voice_received(_dmrd_head(ts=2))
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
+        tr._deliver_slot(1)
         tr.hbp_voice_received(_dmrd_voice(ts=2, voice_seq=0))
+        tr._deliver_slot(2)
         tr.hbp_voice_received(_dmrd_term(ts=1))
         tr.hbp_voice_received(_dmrd_term(ts=2))
         self.assertEqual(len(ipsc.sent), 6)
@@ -372,25 +375,24 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         tr.hbp_voice_received(_dmrd_head(ts=1))
         tr.hbp_voice_received(_dmrd_head(ts=2))
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
+        tr._deliver_slot(1)
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        # After 2 voice bursts on TS1, TS1 seq should be 3 (HEAD + 2 voices)
-        # TS2 seq should be 1 (HEAD only)
+        tr._deliver_slot(1)
+        # TS1: HEAD + 2 delivered voice slots → seq=3; TS2: HEAD only → seq=1
         self.assertEqual(tr._in_rtp_seq[1], 3)
         self.assertEqual(tr._in_rtp_seq[2], 1)
 
-    @patch('translate.translator.time')
-    def test_rtp_ts_tracked_per_ts(self, mock_time):
-        # Simulate packets arriving 60 ms apart (one per TDMA slot).
-        # time() is called once per hbp_voice_received invocation.
-        # Use non-zero base so the rtp_ts_time > 0.0 guard works after first packet.
-        mock_time.side_effect = [1000.000, 1000.060, 1000.120]
+    def test_rtp_ts_advances_480_per_slot(self):
+        # RTP timestamp advances by exactly 480 ticks (8 kHz × 60 ms) per delivered slot.
         tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))   # t=1000.000 → no increment (first pkt on TS1)
-        tr.hbp_voice_received(_dmrd_head(ts=2))   # t=1000.060 → no increment (first pkt on TS2)
-        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))  # t=1000.120 → elapsed=120ms→960 ticks
-        # TS1: HEAD sets ts_time=1000.0; SLOT_VOICE 120 ms later → +round(0.120*8000)=960 ticks
-        self.assertEqual(tr._in_rtp_ts[1], 960)
-        # TS2: only one VOICE_HEAD → first-packet, ts_time init=0.0 → no increment yet
+        tr.hbp_voice_received(_dmrd_head(ts=1))
+        initial_ts = tr._in_rtp_ts[1]
+        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
+        tr._deliver_slot(1)
+        self.assertEqual(tr._in_rtp_ts[1], (initial_ts + 480) & 0xFFFFFFFF)
+        tr._deliver_slot(1)   # second slot (buffer empty → synthesized silence)
+        self.assertEqual(tr._in_rtp_ts[1], (initial_ts + 960) & 0xFFFFFFFF)
+        # TS2 untouched
         self.assertEqual(tr._in_rtp_ts[2], 0)
 
 
@@ -463,6 +465,7 @@ class TestMixedDirections(unittest.TestCase):
         ipsc.sent.clear()
         tr.ipsc_voice_received(_ipsc_gv(1, SLOT1_VOICE), ts=1, burst_type=SLOT1_VOICE)
         tr.hbp_voice_received(_dmrd_voice(ts=2, voice_seq=0))
+        tr._deliver_slot(2)   # fire delivery timer manually
         self.assertEqual(len(hbp.sent),  1, 'IPSC→HBP burst should reach HBP')
         self.assertEqual(len(ipsc.sent), 1, 'HBP→IPSC burst should reach IPSC')
 
