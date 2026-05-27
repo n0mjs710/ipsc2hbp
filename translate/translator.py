@@ -630,11 +630,19 @@ class CallTranslator:
                 log.debug('Duplicate VOICE_HEAD ts=%d stream=%s — forwarding, reusing stream_id=0x%02x',
                           ts, hbp_stream.hex(), self._in_stream_id[ts])
             else:
-                # New call — assign a fresh stream ID, log, and start the delivery clock.
+                # New call — assign a fresh stream ID and clear any leftover delivery state.
+                # Do NOT start the delivery clock here: the HBLink duplicate-header gap
+                # (~179 ms) means burst A arrives well after the 120 ms buffer window,
+                # causing the timer to fire on an empty buffer and synthesize the whole
+                # superframe.  The clock arms from the first real voice burst instead.
                 self._in_hbp_stream_id[ts] = hbp_stream
                 self._in_stream_ctr    = (self._in_stream_ctr + 1) & 0xFF
                 self._in_stream_id[ts] = self._in_stream_ctr
-                self._start_delivery_clock(ts)
+                self._cancel_delivery_timer(ts)
+                self._in_buf[ts].clear()
+                self._in_burst_pos[ts]      = 0
+                self._in_consec_synth[ts]   = 0
+                self._in_next_slot_time[ts] = 0.0
                 log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
                          hbp_stream.hex(), self._in_stream_id[ts])
