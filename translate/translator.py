@@ -54,6 +54,7 @@ from ipsc.const import (
     TS_CALL_MSK, END_MSK,
     GV_CALL_SEQ_OFF, GV_CALL_INFO_OFF,
     GV_SRC_SUB_OFF, GV_DST_GROUP_OFF,
+    GV_BE_FLAG, GV_BE_LC_FLCO_OFF, FLCO_GROUP,
 )
 from hbp.const import (
     HBPF_DMRD,
@@ -73,6 +74,16 @@ _NULL_EMB_LC = bitarray(32, endian='big')
 _NULL_EMB_LC.setall(0)
 
 _EMB_BURST_NAMES = ('BURST_B', 'BURST_C', 'BURST_D', 'BURST_E', 'BURST_F')
+
+# IPSC→HBP call-boundary threshold. Current XPR8400 firmware churns the IPSC
+# call-seq (byte 5) every superframe when Talker Alias is interleaved, so we no
+# longer treat a call-seq change as a boundary. A genuinely new/different call
+# resets the 8 kHz RTP timestamp base, so it appears as a large forward/backward
+# jump; within a call the timestamp advances ~480/burst, and a few dropped bursts
+# stay well under this bound. (Sustained silence with no VOICE_TERM is handled
+# separately by the check_call_timeouts() watchdog.)
+# TODO(field-tune): validate against more captures before production.
+OUT_RTP_MAX_FWD  = 8000   # max forward RTP-timestamp jump (8 kHz units; 480/burst) still same call
 
 
 def _make_ambe_silence_ipsc() -> bytes:
@@ -251,6 +262,30 @@ class CallTranslator:
         if self._cfg.hbp_mode == 'TRACKING':
             self._hbp.deactivate()
 
+    def _reset_out_call(self, ts: int):
+        """Clear all IPSC→HBP per-call state for a timeslot."""
+        self._out_stream_id[ts]      = None
+        self._out_ipsc_stream_id[ts] = None
+        self._out_lc[ts]             = None
+        self._out_emb_lc[ts]         = None
+
+    def _out_call_continues(self, ts: int, rtp_now, prev_rtp) -> bool:
+        """True if the current IPSC voice frame continues the active out-call.
+
+        Replaces the old call-seq (byte 5) comparison, which current XPR8400
+        firmware breaks by churning the call-seq every superframe when Talker
+        Alias is interleaved. A new/different call resets the 8 kHz RTP base, so
+        it shows a large forward/backward jump; within a call the timestamp
+        advances ~480/burst, so a small forward delta — including a few dropped
+        bursts — is still the same call. Sustained silence with no VOICE_TERM is
+        handled separately by check_call_timeouts().
+        """
+        if prev_rtp is not None and rtp_now is not None:
+            delta = (rtp_now - prev_rtp) & 0xFFFFFFFF   # unsigned; a backward jump wraps to large
+            if delta > OUT_RTP_MAX_FWD:
+                return False
+        return True
+
     def ipsc_voice_received(self, data: bytes, ts: int, burst_type: int):
         if not self._hbp.is_connected():
             return
@@ -283,6 +318,7 @@ class CallTranslator:
 
         now      = time()
         prev_wall = self._out_last_pkt[ts]
+        prev_rtp  = self._out_last_rtp_ts[ts]   # capture before the update below (continuity test)
         self._out_last_pkt[ts] = now
 
         # Burst label: H/T for head/term; A-F for voice bursts (by superframe position)
@@ -376,27 +412,30 @@ class CallTranslator:
             flags |= HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VTERM
 
         else:  # SLOT1_VOICE or SLOT2_VOICE
-            # Detect stream ID change mid-stream — prior call ended without VOICE_TERM.
-            # Clear stale state so the code below handles this as late entry.
+            # Boundary detection. The IPSC call-seq (byte 5) is deliberately NOT
+            # consulted: current XPR8400 firmware mints a new call-seq every
+            # superframe when Talker Alias is interleaved, churning it ~30x within
+            # one transmission (and stuffing alias bytes into the header src/dst on
+            # the TA superframes). A genuinely different call instead shows up as an
+            # RTP-timestamp discontinuity; sustained silence with no VOICE_TERM is
+            # caught separately by the check_call_timeouts() watchdog.
             if (self._out_stream_id[ts] is not None
-                    and self._out_ipsc_stream_id[ts] is not None
-                    and self._out_ipsc_stream_id[ts] != ipsc_stream_id):
-                log.warning(
-                    'IPSC stream ID changed on ts=%d (0x%02x→0x%02x) mid-stream '
-                    '— prior call ended without VOICE_TERM, clearing stale state',
-                    ts, self._out_ipsc_stream_id[ts], ipsc_stream_id,
-                )
-                self._out_stream_id[ts]      = None
-                self._out_ipsc_stream_id[ts] = None
-                self._out_lc[ts]             = None
-                self._out_emb_lc[ts]         = None
+                    and not self._out_call_continues(ts, _rtp_now, prev_rtp)):
+                log.info('IPSC call end ts=%d stream=%s — RTP discontinuity, no VOICE_TERM',
+                         ts, self._out_stream_id[ts].hex())
+                self._reset_out_call(ts)
 
             if self._out_stream_id[ts] is None:
-                # Late entry: IPSC Burst E (byte 32 == 0x16) carries dst_group and
-                # src_sub in the header, giving us enough to reconstruct the LC word
-                # and resume forwarding mid-stream. All other burst types lack
-                # unambiguous position information so we keep waiting.
-                if data[32] != 0x16:
+                # Late entry. Anchor identity ONLY to a GVCU burst E: a burst E
+                # carrying Talker Alias / GPS (FLCO != GROUP at byte 56) puts alias
+                # bytes in the header src/dst, so we must not adopt them as the call
+                # identity. Wait for the next GVCU superframe (≤ ~1 superframe).
+                if data[32] != GV_BE_FLAG or len(data) <= GV_BE_LC_FLCO_OFF:
+                    return
+                if data[GV_BE_LC_FLCO_OFF] != FLCO_GROUP:
+                    log.debug('IPSC late entry deferred ts=%d — burst E embedded LC is non-GVCU '
+                              '(flco=0x%02x, Talker Alias/GPS); waiting for GVCU superframe',
+                              ts, data[GV_BE_LC_FLCO_OFF])
                     return
                 lc = LC_OPT + dst_group + src_sub
                 self._out_stream_id[ts]      = os.urandom(4)
@@ -404,9 +443,12 @@ class CallTranslator:
                 self._out_lc[ts]             = lc
                 self._out_emb_lc[ts]         = bptc.encode_emblc(lc)
                 self._out_frame_pos[ts]      = 4  # Burst E is superframe position 4
-                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from Burst E, stream=%s  ipsc_id=0x%02x',
+                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from GVCU Burst E, stream=%s',
                          ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
-                         self._out_stream_id[ts].hex(), ipsc_stream_id)
+                         self._out_stream_id[ts].hex())
+            # Continuation: the per-frame header src/dst and call-seq are ignored
+            # (they may be alias bytes on a TA superframe). All AMBE is forwarded
+            # under the locked identity / stream ID established at call start.
             if len(data) < 52:
                 log.warning('SLOT_VOICE too short for AMBE: %d bytes', len(data))
                 return
@@ -425,11 +467,16 @@ class CallTranslator:
             flags |= HBPF_FRAMETYPE_VOICESYNC if pos == 0 else (HBPF_FRAMETYPE_VOICE | pos)
             self._out_frame_pos[ts] += 1
 
+        # Forward under the LOCKED call identity (from _out_lc), never the per-frame
+        # header — on a Talker Alias superframe the header src/dst are alias bytes.
+        locked_lc = self._out_lc[ts] if self._out_lc[ts] else (LC_OPT + dst_group + src_sub)
+        out_dst   = locked_lc[3:6]
+        out_src   = locked_lc[6:9]
         dmrd = (
             HBPF_DMRD
             + bytes([self._out_seq])
-            + src_sub
-            + dst_group
+            + out_src
+            + out_dst
             + self._repeater_id_b
             + bytes([flags])
             + self._out_stream_id[ts]
@@ -441,12 +488,9 @@ class CallTranslator:
 
         if burst_type == VOICE_TERM:
             log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
-                     int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                     int.from_bytes(out_src, 'big'), int.from_bytes(out_dst, 'big'), ts,
                      self._out_stream_id[ts].hex(), self._out_ipsc_stream_id[ts])
-            self._out_stream_id[ts]      = None
-            self._out_ipsc_stream_id[ts] = None
-            self._out_lc[ts]             = None
-            self._out_emb_lc[ts]         = None
+            self._reset_out_call(ts)
 
     def _build_embed(self, pos: int, emb_lc) -> bitarray:
         """Build the 48-bit EMBED field for superframe position 0–5."""
@@ -765,10 +809,7 @@ class CallTranslator:
                         'IPSC→HBP call timeout: ts=%d stream=%s — no voice for %.1fs, clearing',
                         ts, self._out_stream_id[ts].hex(), elapsed,
                     )
-                    self._out_stream_id[ts]      = None
-                    self._out_ipsc_stream_id[ts] = None
-                    self._out_lc[ts]             = None
-                    self._out_emb_lc[ts]         = None
+                    self._reset_out_call(ts)
             if self._in_lc[ts] is not None:
                 elapsed = now - self._in_last_pkt[ts]
                 if elapsed > timeout:

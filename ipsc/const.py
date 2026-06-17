@@ -81,12 +81,19 @@ END_MSK     = 0b01000000   # bit 6: 1=call end (VOICE_TERM already sent)
 # dumpIPSCFrame() and dmrlink.py datagramReceived().
 # ---------------------------------------------------------------------------
 GV_PEER_ID_OFF    = 1    # bytes 1–4:   source peer radio ID (4 bytes)
-GV_CALL_SEQ_OFF   = 5    # byte  5:     call sequence ID — constant within a call, increments by 1 each new call, wraps at 255
-GV_SRC_SUB_OFF    = 6    # bytes 6–8:   source subscriber ID (3 bytes)
-GV_DST_GROUP_OFF  = 9    # bytes 9–11:  destination group ID / TGID (3 bytes)
+GV_CALL_SEQ_OFF   = 5    # byte  5:     call sequence ID — normally constant within a call, but current
+                         #              XPR8400 firmware mints a NEW value every superframe when Talker
+                         #              Alias is interleaved (see fix/ta-ghost-streams). DO NOT use as a
+                         #              call boundary; anchor on RTP-timestamp continuity instead.
+GV_SRC_SUB_OFF    = 6    # bytes 6–8:   source subscriber ID (3 bytes) — alias bytes on a TA superframe
+GV_DST_GROUP_OFF  = 9    # bytes 9–11:  destination group ID / TGID (3 bytes) — alias bytes on a TA superframe
 GV_CALL_INFO_OFF  = 17   # byte  17:    call info — TS_CALL_MSK and END_MSK
+GV_RTP_TS_OFF     = 22   # bytes 22–25: RTP timestamp (8 kHz, +480/burst) — the real per-call continuity anchor
 GV_BURST_TYPE_OFF = 30   # byte  30:    burst data type (payload type)
 GV_PAYLOAD_OFF    = 31   # bytes 31+:   burst payload (variable length by type)
+GV_BE_FLAG        = 0x16  # data[32] EMB/LC/sync-flags value identifying burst E (carries reassembled LC)
+GV_BE_LC_FLCO_OFF = 56   # byte  56:    FLCO of the reassembled LC repeat carried only on burst E
+FLCO_GROUP        = 0x00  # FLCO for Group Voice Channel User (the real call identity); 0x04-0x08 = TA/GPS
 
 # Minimum GROUP_VOICE length we will accept (must reach byte 30 for burst_type):
 #   SLOT1/SLOT2_VOICE: 52 bytes (31-byte header + 2-byte pad + 19-byte AMBE)
