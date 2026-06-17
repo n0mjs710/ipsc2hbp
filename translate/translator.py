@@ -371,7 +371,7 @@ class CallTranslator:
             if self._out_stream_id[ts] is None:
                 self._out_stream_id[ts]      = os.urandom(4)
                 self._out_ipsc_stream_id[ts] = ipsc_stream_id
-                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
+                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
                          int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
                          ts, self._out_stream_id[ts].hex(), ipsc_stream_id)
             else:
@@ -443,9 +443,9 @@ class CallTranslator:
                 self._out_lc[ts]             = lc
                 self._out_emb_lc[ts]         = bptc.encode_emblc(lc)
                 self._out_frame_pos[ts]      = 4  # Burst E is superframe position 4
-                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from GVCU Burst E, stream=%s',
+                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from GVCU Burst E, stream=%s  int_seq_id=0x%02x',
                          ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
-                         self._out_stream_id[ts].hex())
+                         self._out_stream_id[ts].hex(), ipsc_stream_id)
             # Continuation: the per-frame header src/dst and call-seq are ignored
             # (they may be alias bytes on a TA superframe). All AMBE is forwarded
             # under the locked identity / stream ID established at call start.
@@ -487,7 +487,7 @@ class CallTranslator:
         self._hbp.send_dmrd(dmrd)
 
         if burst_type == VOICE_TERM:
-            log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
+            log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
                      int.from_bytes(out_src, 'big'), int.from_bytes(out_dst, 'big'), ts,
                      self._out_stream_id[ts].hex(), self._out_ipsc_stream_id[ts])
             self._reset_out_call(ts)
