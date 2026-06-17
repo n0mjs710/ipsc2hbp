@@ -792,13 +792,17 @@ class CallTranslator:
     # Watchdog support
     # ------------------------------------------------------------------
 
-    def check_call_timeouts(self, timeout: float = 10.0):
+    def check_call_timeouts(self, timeout: float = 2.0):
         """
-        Called by the IPSC watchdog every 5 s.  If a call stream has been active
-        but silent for longer than `timeout` seconds (default 10 s — 2 watchdog
-        ticks), log a warning and clear that timeslot's state so it can accept
-        a new call.  This handles the case where VOICE_TERM is never received
-        (RF dropout, firmware bug, lost packet).
+        Called by the IPSC watchdog (~5 s cadence).  If a call stream has been
+        active but silent for longer than `timeout` seconds (default 2 s), log a
+        warning and clear that timeslot's state.  This is a dead-man cleanup for
+        the case where VOICE_TERM is never received (RF dropout, firmware bug,
+        lost packet) with no follow-on call: it keeps the logged call-end (and
+        status) close to the real call duration instead of lingering.  A real
+        new call already resets stale state inline (RTP discontinuity), so this
+        is hygiene, not load-bearing.  Detection is coarse (it rides the ~5 s
+        watchdog, so effective clearing is ~2-7 s) — fine for a dead-man.
         """
         now = time()
         for ts in (1, 2):

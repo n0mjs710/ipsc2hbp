@@ -485,7 +485,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
             self.assertIsNotNone(tr._out_stream_id[1])
 
             mock_time.return_value = 1011.0   # 11 s later — beyond 10 s threshold
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[1], 'TS1 stream should be cleared')
         self.assertIsNone(tr._out_lc[1])
@@ -499,7 +499,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
             self.assertIsNotNone(tr._out_stream_id[2])
 
             mock_time.return_value = 1011.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[2], 'TS2 stream should be cleared')
 
@@ -512,7 +512,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
             mock_time.return_value = 1005.0
             tr.ipsc_voice_received(_ipsc_gv(1, SLOT1_VOICE), ts=1, burst_type=SLOT1_VOICE)
             mock_time.return_value = 1008.0   # only 3 s since last packet
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNotNone(tr._out_stream_id[1],
                              'Stream should survive — last packet was recent')
@@ -530,7 +530,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
             tr.ipsc_voice_received(_ipsc_gv(2, SLOT2_VOICE), ts=2, burst_type=SLOT2_VOICE)
 
             mock_time.return_value = 1012.0   # TS1 silent 12 s; TS2 last packet 7 s ago
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[1],    'TS1 should time out')
         self.assertIsNotNone(tr._out_stream_id[2], 'TS2 should still be active')
@@ -546,7 +546,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
             tr.ipsc_voice_received(_ipsc_gv(1, SLOT1_VOICE), ts=1, burst_type=SLOT1_VOICE)
 
             mock_time.return_value = 1012.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[2],    'TS2 should time out')
         self.assertIsNotNone(tr._out_stream_id[1], 'TS1 should still be active')
@@ -558,15 +558,28 @@ class TestOutboundCallTimeout(unittest.TestCase):
             mock_time.return_value = 1000.0
             tr.ipsc_voice_received(_ipsc_gv(1, VOICE_HEAD), ts=1, burst_type=VOICE_HEAD)
             mock_time.return_value = 1010.0   # exactly 10.0 s — not strictly > 10
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNotNone(tr._out_stream_id[1],
                              'Exactly at threshold should not trigger timeout')
 
+    def test_default_timeout_is_2s(self):
+        """The production default (no explicit arg) is a 2 s dead-man."""
+        tr, _, _ = _make_tr()
+        with patch('translate.translator.time') as mock_time:
+            mock_time.return_value = 1000.0
+            tr.ipsc_voice_received(_ipsc_gv(1, VOICE_HEAD), ts=1, burst_type=VOICE_HEAD)
+            mock_time.return_value = 1001.9        # 1.9 s — under the 2 s default
+            tr.check_call_timeouts()               # no arg -> default
+            self.assertIsNotNone(tr._out_stream_id[1], 'under 2 s must survive')
+            mock_time.return_value = 1002.1        # 2.1 s — over the 2 s default
+            tr.check_call_timeouts()               # no arg -> default
+            self.assertIsNone(tr._out_stream_id[1], 'over 2 s must clear')
+
     def test_no_crash_when_no_active_streams(self):
         """check_call_timeouts() on an idle translator must not raise."""
         tr, _, _ = _make_tr()
-        tr.check_call_timeouts()   # no exception expected
+        tr.check_call_timeouts(10.0)   # no exception expected
 
     def test_normal_term_still_works_after_timeout_logic_added(self):
         """A properly-terminated call still clears stream ID the normal way."""
@@ -574,7 +587,7 @@ class TestOutboundCallTimeout(unittest.TestCase):
         tr.ipsc_voice_received(_ipsc_gv(1, VOICE_HEAD), ts=1, burst_type=VOICE_HEAD)
         tr.ipsc_voice_received(_ipsc_gv(1, VOICE_TERM), ts=1, burst_type=VOICE_TERM)
         self.assertIsNone(tr._out_stream_id[1])
-        tr.check_call_timeouts()   # should be a no-op; nothing to time out
+        tr.check_call_timeouts(10.0)   # should be a no-op; nothing to time out
 
 
 # ===========================================================================
@@ -592,7 +605,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             self.assertIsNotNone(tr._in_lc[1])
 
             mock_time.return_value = 2011.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._in_lc[1],     'TS1 inbound LC should be cleared')
         self.assertIsNone(tr._in_emb_lc[1])
@@ -604,7 +617,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             tr.hbp_voice_received(_dmrd_head(ts=2))
 
             mock_time.return_value = 2011.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._in_lc[2], 'TS2 inbound LC should be cleared')
 
@@ -616,7 +629,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             mock_time.return_value = 2005.0
             tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
             mock_time.return_value = 2008.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNotNone(tr._in_lc[1], 'Active stream should not time out')
 
@@ -631,7 +644,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             tr.hbp_voice_received(_dmrd_voice(ts=2, voice_seq=0))
 
             mock_time.return_value = 2013.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._in_lc[1],    'TS1 should time out')
         self.assertIsNotNone(tr._in_lc[2], 'TS2 should still be active')
@@ -647,7 +660,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
 
             mock_time.return_value = 2013.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._in_lc[2],    'TS2 should time out')
         self.assertIsNotNone(tr._in_lc[1], 'TS1 should still be active')
@@ -658,7 +671,7 @@ class TestInboundCallTimeout(unittest.TestCase):
             mock_time.return_value = 2000.0
             tr.hbp_voice_received(_dmrd_head(ts=1))
             mock_time.return_value = 2010.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNotNone(tr._in_lc[1],
                              'Exactly at threshold should not trigger timeout')
@@ -668,7 +681,7 @@ class TestInboundCallTimeout(unittest.TestCase):
         tr.hbp_voice_received(_dmrd_head(ts=1))
         tr.hbp_voice_received(_dmrd_term(ts=1))
         self.assertIsNone(tr._in_lc[1])
-        tr.check_call_timeouts()   # no-op; should not raise
+        tr.check_call_timeouts(10.0)   # no-op; should not raise
 
 
 # ===========================================================================
@@ -690,7 +703,7 @@ class TestCrossDirectionTimeout(unittest.TestCase):
             tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))   # keep inbound alive
 
             mock_time.return_value = 3013.0   # outbound silent 13 s; inbound 7 s ago
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[1], 'outbound TS1 timed out')
         self.assertIsNotNone(tr._in_lc[1],      'inbound TS1 unaffected')
@@ -707,7 +720,7 @@ class TestCrossDirectionTimeout(unittest.TestCase):
             tr.ipsc_voice_received(_ipsc_gv(2, SLOT2_VOICE), ts=2, burst_type=SLOT2_VOICE)
 
             mock_time.return_value = 3013.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._in_lc[2],            'inbound TS2 timed out')
         self.assertIsNotNone(tr._out_stream_id[2], 'outbound TS2 unaffected')
@@ -731,7 +744,7 @@ class TestCrossDirectionTimeout(unittest.TestCase):
             # At t=4012: out-ts1 and in-ts2 have been silent 12 s → time out
             #             out-ts2 and in-ts1 have been silent 7 s  → survive
             mock_time.return_value = 4012.0
-            tr.check_call_timeouts()
+            tr.check_call_timeouts(10.0)
 
         self.assertIsNone(tr._out_stream_id[1],    'out-TS1 timed out (12 s)')
         self.assertIsNotNone(tr._out_stream_id[2], 'out-TS2 active (7 s)')
@@ -809,7 +822,7 @@ class TestStateReset(unittest.TestCase):
         tr, _, _ = _make_tr()
         self._start_all_streams(tr)
         tr.peer_lost()
-        tr.check_call_timeouts()   # must not raise or misfire
+        tr.check_call_timeouts(10.0)   # must not raise or misfire
 
     def test_new_call_accepted_after_peer_lost(self):
         """After peer_lost() + new registration, calls can start fresh."""
