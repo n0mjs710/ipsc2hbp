@@ -64,7 +64,19 @@ BURST_NAMES = {
     SLOT2_VOICE: 'SLOT2_VOICE',
 }
 
-FLCO_NAMES = {0x00: 'Group', 0x03: 'Unit-to-Unit'}
+FLCO_NAMES = {
+    0x00: 'Group', 0x03: 'Unit-to-Unit',
+    0x04: 'TA_HEADER', 0x05: 'TA_BLOCK1', 0x06: 'TA_BLOCK2', 0x07: 'TA_BLOCK3',
+    0x08: 'GPS_INFO',
+}
+
+# Burst-E payload offsets: the reassembled LC repeat (see ipsc_packet_reference.md).
+# Present only on burst E (EMB/LC/sync flags byte == 0x16); 66-byte frame.
+GV_BURST_E_FLAG    = 0x16   # data[32] value identifying burst E
+GV_BE_LC_FLCO_OFF  = 56     # FLCO(1) + FID(1) + SVC_OPT(1)
+GV_BE_DST_OFF      = 59     # destination group (3)
+GV_BE_SRC_OFF      = 62     # source subscriber (3)
+GV_BE_EMB_OFF      = 65     # FEC-decoded EMB (0x14 for GVCU)
 
 _LINE_RE = re.compile(r'IPSC (RECV|SEND) (\S+) (\d+) ([0-9a-f]+)', re.IGNORECASE)
 
@@ -401,6 +413,32 @@ def decode_packet(data: bytes, frame_num: int, direction: str, peer_ip: str,
             print(f'         AMBE: packet too short ({len(data)} bytes)')
         if len(data) > 52:
             print(f'         EMB/ext({len(data)-52}B): {data[52:].hex()}')
+        # Burst E carries a reassembled LC repeat (FLCO + dst + src). On a normal
+        # GVCU superframe it matches the common header; on a Talker Alias / GPS
+        # superframe the FLCO is 0x04-0x08 and dst/src are alias/GPS bytes, so it
+        # WILL differ from the header — that divergence is expected, not corruption.
+        if len(data) > 32 and data[32] == GV_BURST_E_FLAG and len(data) >= GV_BE_EMB_OFF + 1:
+            be_flco = data[GV_BE_LC_FLCO_OFF]
+            be_fid  = data[GV_BE_LC_FLCO_OFF + 1]
+            be_svc  = data[GV_BE_LC_FLCO_OFF + 2]
+            be_dst  = _id3(data[GV_BE_DST_OFF : GV_BE_DST_OFF + 3])
+            be_src  = _id3(data[GV_BE_SRC_OFF : GV_BE_SRC_OFF + 3])
+            be_emb  = data[GV_BE_EMB_OFF]
+            flco_name = FLCO_NAMES.get(be_flco, f'0x{be_flco:02x}')
+            is_gvcu = (be_flco == 0x00)
+            diverges = (be_dst != dst) or (be_src != src)
+            print(f'         LC-repeat[burst E]: flco={flco_name}  fid=0x{be_fid:02x}  '
+                  f'svc=0x{be_svc:02x}  dst={be_dst}  src={be_src}  emb=0x{be_emb:02x}')
+            if not is_gvcu:
+                print(f'         *** NON-GVCU embedded LC on burst E (flco={flco_name}) — '
+                      f'header identity src={src} dst={dst} is authoritative; '
+                      f'LC-repeat dst/src are {flco_name} payload, not call identity')
+                stats['be_nongvcu'] = stats.get('be_nongvcu', 0) + 1
+            elif diverges:
+                print(f'         *** GVCU LC-repeat DISAGREES with header: '
+                      f'header src={src} dst={dst}  vs  LC src={be_src} dst={be_dst}')
+                stats['be_gvcu_mismatch'] = stats.get('be_gvcu_mismatch', 0) + 1
+            stats['be_total'] = stats.get('be_total', 0) + 1
 
 # ---------------------------------------------------------------------------
 # Main
@@ -460,6 +498,12 @@ def main():
         print('  Burst counts:')
         for name, count in sorted(burst_counts.items(), key=lambda x: -x[1]):
             print(f'    {name:<14s} {count}')
+    be_total = stats.get('be_total', 0)
+    if be_total:
+        print('  Burst-E embedded LC repeat:')
+        print(f'    total burst E         {be_total}')
+        print(f'    non-GVCU (TA/GPS)     {stats.get("be_nongvcu", 0)}')
+        print(f'    GVCU header mismatch  {stats.get("be_gvcu_mismatch", 0)}')
     other = stats.get('other', [])
     if other:
         from collections import Counter
