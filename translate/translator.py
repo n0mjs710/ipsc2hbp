@@ -671,11 +671,11 @@ class CallTranslator:
                     'VOICE_TERM, clearing stale state',
                     ts, self._in_hbp_stream_id[ts].hex(), hbp_stream.hex(),
                 )
-                self._cancel_synth_timer(ts)
+                self._cancel_delivery_timer(ts)
+                self._in_buf[ts].clear()
                 self._in_lc[ts]             = None
                 self._in_emb_lc[ts]         = None
                 self._in_hbp_stream_id[ts]  = None
-                self._in_rtp_ts_time[ts]    = 0.0
                 self._in_next_slot_time[ts] = 0.0
                 self._in_burst_pos[ts]      = 0
                 self._in_consec_synth[ts]   = 0
