@@ -1,4 +1,5 @@
 ## PROJECT: IPSC to HomeBrew Protocol Translator ##
+**C version available: ipsc2hbpc**
 
 **NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it invovles painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
 
