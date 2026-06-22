@@ -566,6 +566,8 @@ Assign a new call stream ID for byte 5 (per-call constant — see section 4.6). 
 
 The entire inbound call — headers, voice bursts, and the terminator — is clocked out to IPSC through a **single per-timeslot delivery timer** at the exact 60 ms DMR slot cadence, rather than each frame being forwarded the instant it arrives. This is what lets a MOTOTRBO repeater see a continuous 60 ms grid identical to what its own equipment produces.
 
+**Why only this direction.** The jitter buffer exists solely on the HBP→IPSC path. In practice the IPSC side (the MOTOTRBO repeater) is markedly less tolerant of timing jitter, lost frames, and out-of-order delivery than the HBP side: it expects a clean, continuous 60 ms grid and can mis-handle a stream whose frames arrive bunched, gapped, or reordered. HBP network servers, by contrast, absorb that variation without complaint, so the outbound IPSC→HBP path forwards frames straight through with no buffering. We pay the buffering cost (and its latency) only where it is actually needed — feeding the repeater.
+
 Three per-timeslot structures feed the clock, drained in this priority order each slot:
 
 1. **Header pre-roll FIFO** — queued `VOICE_HEAD` LCs, emitted first (one per slot).
