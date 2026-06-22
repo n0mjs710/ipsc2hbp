@@ -7,6 +7,7 @@ Outputs:
   /tmp/parity_in.txt   lines: "<ts> <burst_type> <input_hex>"
   /tmp/parity_ref.txt  lines: "<dmrd_hex_masked>"  (one per DMRD emitted)
 """
+import asyncio
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import load as load_config
@@ -45,6 +46,9 @@ def build_frame(call_seq, src, dst, ts, burst_type, ambe=b'', byte32=0x00):
 
 
 def main():
+    # The inbound (HBP→IPSC) path clocks frames out via asyncio timers, so a
+    # loop must exist for call_at()/loop.time(); we drive the clock manually below.
+    asyncio.set_event_loop(asyncio.new_event_loop())
     cfg = load_config(os.path.join(os.path.dirname(__file__), '..', 'tests', 'test.toml'))
     tr = CallTranslator(cfg)
     hbp = MockHBP()
@@ -101,6 +105,13 @@ def main():
     tr2.set_protocols(MockIPSC2(), MockHBP())
     for d in in_frames:
         tr2.hbp_voice_received(d)
+    # HEAD/TERM are now clocked out via the delivery timer — fire slots until the
+    # call clears so the reference captures the emitted GROUP_VOICE frames.
+    for _ in range(12):
+        if (tr2._in_lc[1] is None and not tr2._in_head_queue[1]
+                and not tr2._in_term_pending[1]):
+            break
+        tr2._deliver_slot(1)
 
     with open('/tmp/parity_in_dmrd.txt', 'w') as fo:
         for d in in_frames:

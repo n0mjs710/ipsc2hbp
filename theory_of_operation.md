@@ -558,9 +558,25 @@ The IPSC payload after the burst_type byte differs by HBP frame type / dtype:
 bptc_bits = frame_bits[0:98] + frame_bits[166:264]   # 196-bit BPTC
 lc = bptc.decode_full_lc(bptc_bits).tobytes()
 ```
-Assign a new call stream ID for byte 5 (per-call constant — see section 4.6). Pre-compute embedded LC fragments for subsequent SLOT_VOICE bursts. Send one 54-byte GROUP_VOICE packet with `burst_type = VOICE_HEAD`, RTP PT=0xdd (M=1, call-start marker).
+Assign a new call stream ID for byte 5 (per-call constant — see section 4.6). Pre-compute embedded LC fragments for subsequent SLOT_VOICE bursts. The 54-byte GROUP_VOICE packet (`burst_type = VOICE_HEAD`, RTP PT=0xdd, M=1 call-start marker) is **not sent immediately**: it is appended to the per-timeslot header pre-roll and emitted by the delivery clock (section 7.8). Each received VOICE_HEAD is relayed faithfully — Motorola radios send 2–3 for loss resilience, and we forward exactly the number received, never fabricating extras.
 
-**VOICE_TERM**: Use stored LC from the call's VOICE_HEAD. Send one 54-byte GROUP_VOICE packet with `burst_type = VOICE_TERM`, `call_info |= END_MSK`, RTP PT=0x5e. Clear inbound call state.
+**VOICE_TERM**: Mark the terminator pending (storing the call's LC). The delivery clock emits the 54-byte GROUP_VOICE packet (`burst_type = VOICE_TERM`, `call_info |= END_MSK`, RTP PT=0x5e) only once the buffered voice tail has drained, then clears inbound call state. Deferring it this way avoids clipping the last ~120 ms of audio.
+
+### 7.8 Inbound delivery clock (HBP → IPSC jitter buffer)
+
+The entire inbound call — headers, voice bursts, and the terminator — is clocked out to IPSC through a **single per-timeslot delivery timer** at the exact 60 ms DMR slot cadence, rather than each frame being forwarded the instant it arrives. This is what lets a MOTOTRBO repeater see a continuous 60 ms grid identical to what its own equipment produces.
+
+Three per-timeslot structures feed the clock, drained in this priority order each slot:
+
+1. **Header pre-roll FIFO** — queued `VOICE_HEAD` LCs, emitted first (one per slot).
+2. **Position-indexed voice buffer** — `pos 0–5 (A–F) → AMBE`. The position index is what makes jitter handling robust: if a burst is late or lost, the slot is filled with synthesized **AMBE silence** for that position and the grid keeps moving; a burst that arrives after its slot is simply stale rather than producing a drifted extra frame.
+3. **Terminator pending flag** — the `VOICE_TERM` is emitted only after the voice buffer empties.
+
+**Uniform delay.** The clock is anchored `jitter_buffer_depth` slots in the future when the first frame of a call arrives, and each subsequent slot targets an *absolute* time (`anchor + N × 60 ms`), so it is drift-free and self-correcting if a timer fires late. Because headers, voice, and terminator all share this one delay, the **source's own header→voice spacing is preserved, not inflated** — emitting the header immediately while delaying voice would open an artificial gap that a strict repeater can read as a failed call start.
+
+**`jitter_buffer_depth`** (`[hbp]`, default 2 = 120 ms, range 1–8) sets that delay. Deeper absorbs more inbound jitter at the cost of equal added call-setup latency: `1` (60 ms) for a clean LAN, `2` for typical paths, `3–8` (180–480 ms) for marginal / high-latency RF backhaul. PTT audio tolerates this comfortably.
+
+**Stream end / dead-man.** If `MAX_SYNTH_BURSTS` (6 ≈ 360 ms) consecutive slots are synthesized silence with no real audio, the clock synthesizes a `VOICE_TERM` and ends the call. A separate coarse watchdog (`check_call_timeouts`) clears any call still hung after ~2 s as hygiene.
 
 ---
 

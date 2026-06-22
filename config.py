@@ -45,6 +45,7 @@ class Config:
     hbp_repeater_id: int          # radio ID this system presents to the HBP master
     hbp_passphrase: bytes
     hbp_mode: str
+    jitter_buffer_depth: int      # HBP→IPSC delivery delay in 60 ms slots (de-jitter)
 
     # RPTC announcement fields
     options: str
@@ -304,6 +305,8 @@ def load(path: str) -> Config:
     hbp_master_port = get_int('hbp', 'master_port', min_val=1, max_val=65535)
     hbp_mode        = get_str('hbp', 'hbp_mode', choices=_VALID_HBP_MODES)
     hbp_repeater_id = get_int('hbp', 'hbp_repeater_id', required=True, min_val=1)
+    jitter_buffer_depth = get_int('hbp', 'jitter_buffer_depth', required=False,
+                                  default=2, min_val=1, max_val=8)
 
     raw_passphrase = get_str('hbp', 'passphrase')
     hbp_passphrase = raw_passphrase.encode()
@@ -351,6 +354,7 @@ def load(path: str) -> Config:
         hbp_repeater_id=hbp_repeater_id,
         hbp_passphrase=hbp_passphrase,
         hbp_mode=hbp_mode,
+        jitter_buffer_depth=jitter_buffer_depth,
         options=options,
         callsign=callsign,
         rx_freq=rx_freq,

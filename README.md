@@ -21,6 +21,7 @@ The previous solution to this problem was a pair of Python 2 applications: `IPSC
 - **One config file.** TOML. Copy the sample, fill in your repeater ID, passphrase, and frequencies. Done.
 - **Correct over clever.** Protocol behavior is derived from the DMRlink and HBlink source — not the published specs, which contain several errors. Where the spec disagrees with working code, the code wins.
 - **TRACKING mode by default.** The HBP connection follows the repeater: it comes up when the repeater registers and drops when the repeater goes away. PERSISTENT mode is available if you'd rather keep the upstream connection up regardless.
+- **Native call timing on the IPSC side.** The whole HBP→IPSC call (headers, voice, terminator) is clocked out through one jitter buffer at the exact 60 ms DMR cadence, so the repeater sees a continuous grid identical to real MOTOTRBO equipment — no header→voice gap and no clipped tail. Depth is tunable per link via `[hbp] jitter_buffer_depth` (default 2 = 120 ms; raise it for marginal/high-latency RF backhaul).
 
 **WHAT IT IS NOT:**
 

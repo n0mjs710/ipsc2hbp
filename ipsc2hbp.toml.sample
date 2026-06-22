@@ -192,6 +192,18 @@ passphrase = "passw0rd"
 #               is established at startup, before any repeater registers.
 hbp_mode = "TRACKING"
 
+# HBP→IPSC jitter buffer depth, in 60 ms TDMA slots (default 2 = 120 ms).
+# The whole call (voice headers, voice, terminator) is clocked out to IPSC at a
+# uniform delay of this many slots, so the source's own header→voice spacing is
+# preserved and the repeater sees a continuous 60 ms grid.  Deeper = absorbs more
+# inbound jitter at the cost of that much added call-setup latency:
+#   1 → 60 ms   (clean low-latency LAN link)
+#   2 → 120 ms  (default; absorbs the jitter seen on typical paths)
+#   3-8 → 180-480 ms (marginal / high-latency RF backhaul — trade delay for
+#                     reliability).  PTT audio tolerates this; c-Bridge already
+#                     adds far more.
+jitter_buffer_depth = 2
+
 # ---------------------------------------------------------------------------
 # Options string — sent as RPTO after RPTC if non-empty.
 # Used to subscribe to specific TGIDs on HBlink4 and compatible servers.
