@@ -213,16 +213,18 @@ class CallTranslator:
         self._peer_call_ctrl = b'\x00\x00\x43\xe2'  # Motorola repeater default
 
         # Inbound jitter buffer + delivery state (HBP → IPSC) — keyed by timeslot
-        # The ENTIRE call (headers, voice, terminator) is clocked out through the
-        # one delivery timer at a uniform 60 ms cadence, so the source's own
-        # header→voice spacing is preserved instead of inflated.  Headers are held
-        # in a pre-roll FIFO and emitted before voice; the terminator is emitted
-        # only after the buffered voice tail drains.
+        # VOICE_HEAD and VOICE_TERM are NOT clocked through the buffer: headers are
+        # forwarded the instant they arrive, and the delivery clock is anchored to
+        # the FIRST VOICE burst with _depth slots of lead.  This is essential — the
+        # HBP wire carries a single header followed by a ~175 ms gap before voice
+        # (HBP forwards only one of the radio's redundant headers), which is wider
+        # than the buffer depth; anchoring the clock to the header would leave voice
+        # with no jitter lead at all.  The terminator is the one exception: it is
+        # held pending and emitted by the clock only after the buffered voice tail
+        # drains, so the call tail is no longer clipped.
         self._depth             = cfg.jitter_buffer_depth  # delivery delay in 60 ms slots
         self._in_buf            = {1: {},   2: {}}     # pos (0-5) → ambe_19 bytes; filled on receive
-        self._in_head_queue     = {1: [],   2: []}     # pending VOICE_HEAD LCs (pre-roll, FIFO)
         self._in_term_pending   = {1: False, 2: False} # terminator received; emit after tail drains
-        self._in_voice_started  = {1: False, 2: False} # first voice burst delivered yet (anchors pos)
         self._in_next_slot_time = {1: 0.0,  2: 0.0}   # monotonic abs time of next delivery; 0.0 = idle
         self._in_burst_pos      = {1: 0,    2: 0}      # superframe position of next delivery (0-5 = A-F)
         self._in_consec_synth   = {1: 0,    2: 0}      # consecutive synthesized (empty-slot) deliveries
@@ -258,9 +260,7 @@ class CallTranslator:
         self._in_hbp_stream_id       = {1: None, 2: None}
         self._in_last_pkt            = {1: 0.0,  2: 0.0}
         self._in_buf                 = {1: {},   2: {}}
-        self._in_head_queue          = {1: [],   2: []}
         self._in_term_pending        = {1: False, 2: False}
-        self._in_voice_started       = {1: False, 2: False}
         self._in_next_slot_time      = {1: 0.0,  2: 0.0}
         self._in_burst_pos           = {1: 0,    2: 0}
         self._in_consec_synth        = {1: 0,    2: 0}
@@ -536,14 +536,16 @@ class CallTranslator:
             self._delivery_timer_cb, ts,
         )
 
-    def _ensure_clock(self, ts: int):
-        """Start the delivery clock if idle, anchored _depth slots in the future.
+    def _clock_idle(self, ts: int) -> bool:
+        return self._in_delivery_timer[ts] is None and self._in_next_slot_time[ts] == 0.0
 
-        The whole call (headers, voice, terminator) is clocked from this single
-        anchor at the 60 ms TDMA cadence, so the source's own header→voice spacing
-        is preserved rather than inflated.  Called from every inbound frame.
-        """
-        if self._in_delivery_timer[ts] is None and self._in_next_slot_time[ts] == 0.0:
+    def _arm_clock_from_voice(self, ts: int, first_pos: int):
+        """Anchor the delivery clock to the FIRST voice burst, with _depth slots
+        of lead.  The header→voice gap on the HBP wire (~175 ms) is wider than the
+        buffer, so the clock is deliberately NOT anchored to the header — doing so
+        would consume all the lead before voice arrives and starve the buffer."""
+        if self._clock_idle(ts):
+            self._in_burst_pos[ts]      = first_pos
             self._in_consec_synth[ts]   = 0
             self._in_next_slot_time[ts] = asyncio.get_event_loop().time() + self._depth * 0.060
             self._arm_delivery_timer(ts)
@@ -556,8 +558,7 @@ class CallTranslator:
         self._in_delivery_timer[ts] = None
         if not self._ipsc.has_peers():
             return
-        if (self._in_lc[ts] is None and not self._in_head_queue[ts]
-                and not self._in_term_pending[ts]):
+        if self._in_lc[ts] is None and not self._in_term_pending[ts]:
             return
         self._deliver_slot(ts)
 
@@ -575,20 +576,13 @@ class CallTranslator:
         )
 
     def _deliver_slot(self, ts: int):
-        """Deliver one slot of the call on the 60 ms grid: a queued header first,
-        then buffered voice (synthesizing AMBE silence for jitter gaps), and the
-        terminator only once the buffered voice tail has fully drained."""
+        """Deliver one voice slot on the 60 ms grid: buffered AMBE if present,
+        synthesized AMBE silence for jitter gaps, and the terminator only once the
+        buffered voice tail has fully drained.  (Headers are not clocked here — they
+        are forwarded immediately on receive.)"""
         call_info = TS_CALL_MSK if ts == 2 else 0x00
 
-        # 1) Header pre-roll — emit one queued VOICE_HEAD this slot.
-        if self._in_head_queue[ts]:
-            lc = self._in_head_queue[ts].pop(0)
-            gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(lc, VOICE_HEAD)
-            self._emit_in(ts, lc, call_info, 0xdd, gv_payload, advance_ts=False)
-            self._advance_clock(ts)
-            return
-
-        # 2) Voice delivery (position-indexed; silence fills jitter gaps).
+        # Voice delivery (position-indexed; silence fills jitter gaps).
         pos     = self._in_burst_pos[ts]
         ambe_19 = self._in_buf[ts].pop(pos, None)
 
@@ -610,7 +604,6 @@ class CallTranslator:
         else:
             self._in_consec_synth[ts] = 0
 
-        self._in_voice_started[ts] = True
         gv_payload = self._build_slot_voice_payload(ts, pos, ambe_19)
         self._emit_in(ts, self._in_lc[ts], call_info, 0x5d, gv_payload, advance_ts=True)
         self._in_burst_pos[ts] = (pos + 1) % 6
@@ -631,9 +624,7 @@ class CallTranslator:
         """Reset all inbound (HBP→IPSC) per-call state for a timeslot."""
         self._cancel_delivery_timer(ts)
         self._in_buf[ts].clear()
-        self._in_head_queue[ts]     = []
         self._in_term_pending[ts]   = False
-        self._in_voice_started[ts]  = False
         self._in_next_slot_time[ts] = 0.0
         self._in_burst_pos[ts]      = 0
         self._in_consec_synth[ts]   = 0
@@ -712,9 +703,9 @@ class CallTranslator:
             lc = bptc.decode_full_lc(bptc_bits).tobytes()
             if hbp_stream != self._in_hbp_stream_id[ts]:
                 # New call — clear any leftover delivery state and assign a fresh
-                # stream ID.  The header is NOT sent now; it is queued and clocked
-                # out (with voice and the terminator) so the source's own
-                # header→voice spacing is preserved instead of inflated.
+                # stream ID.  Do NOT arm the delivery clock here: the header→voice
+                # gap on the HBP wire (~175 ms) is wider than the buffer, so the
+                # clock is armed from the first VOICE burst instead.
                 self._clear_in_call(ts)
                 self._in_rtp_seq[ts]       = 0
                 self._in_rtp_ts[ts]        = 0
@@ -726,13 +717,16 @@ class CallTranslator:
                          hbp_stream.hex(), self._in_stream_id[ts])
             else:
                 # Duplicate VOICE_HEAD — Motorola radios send 2-3 for loss
-                # resilience.  Relay each one faithfully (queue it); never fabricate.
-                log.debug('Duplicate VOICE_HEAD ts=%d stream=%s — relaying, stream_id=0x%02x',
+                # resilience.  Relay each one faithfully; never fabricate.
+                log.debug('Duplicate VOICE_HEAD ts=%d stream=%s — forwarding, stream_id=0x%02x',
                           ts, hbp_stream.hex(), self._in_stream_id[ts])
             self._in_lc[ts]     = lc
             self._in_emb_lc[ts] = bptc.encode_emblc(lc)
-            self._in_head_queue[ts].append(lc)
-            self._ensure_clock(ts)
+            # Forward the header immediately — it preserves the source's header
+            # spacing exactly and keeps the header out of the voice delivery clock.
+            call_info  = TS_CALL_MSK if ts == 2 else 0x00
+            gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(lc, VOICE_HEAD)
+            self._emit_in(ts, lc, call_info, 0xdd, gv_payload, advance_ts=False)
             return
 
         elif frame_type == HBPF_FRAMETYPE_DATASYNC and dtype == HBPF_SLT_VTERM:
@@ -743,10 +737,12 @@ class CallTranslator:
                 self._in_emb_lc[ts] = bptc.encode_emblc(self._in_lc[ts])
                 if self._in_hbp_stream_id[ts] is None:
                     self._in_hbp_stream_id[ts] = hbp_stream
-            # Mark the terminator pending; the clock emits it once the buffered
-            # voice tail has drained, so we stop clipping the end of the call.
+            # Mark the terminator pending so the call tail isn't clipped.
             self._in_term_pending[ts] = True
-            self._ensure_clock(ts)
+            if self._clock_idle(ts):
+                # No buffered voice tail to drain — emit the terminator now.
+                self._emit_term(ts)
+            # else: the running delivery clock emits TERM after the tail drains.
             return
 
         else:  # VOICESYNC (burst A) or VOICE (bursts B-F)
@@ -786,12 +782,11 @@ class CallTranslator:
             else:
                 cur_pos = max(dtype, 1)   # dtype 0→B(1), 1→B(1), 2→C(2), 3→D(3)
 
-            # Anchor voice delivery to the position of the first buffered burst.
-            if not self._in_voice_started[ts] and not self._in_buf[ts]:
-                self._in_burst_pos[ts] = cur_pos
-
             self._in_buf[ts][cur_pos] = _extract_ambe_from_dmrd(payload_33)
-            self._ensure_clock(ts)
+            # Arm the delivery clock from the FIRST voice burst (idle → arm), giving
+            # voice the full _depth slots of jitter lead regardless of the
+            # header→voice gap.  cur_pos anchors the superframe phase.
+            self._arm_clock_from_voice(ts, cur_pos)
             return
 
     def _build_gv(self, src_sub, dst_group, call_info, rtp_hdr, gv_payload, stream_id: int) -> bytes:

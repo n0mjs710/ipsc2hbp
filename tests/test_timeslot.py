@@ -222,13 +222,13 @@ def _make_tr():
 def _drain(tr, ts, n=12):
     """Tick the inbound delivery clock for a timeslot until the call clears.
 
-    The entire HBP→IPSC call (headers, voice, terminator) is now clocked out
-    through the delivery timer, so tests must fire the slot to realize emissions
-    that live code performs via asyncio timer callbacks.
+    Voice (and the held terminator) are clocked out through the delivery timer, so
+    tests must fire the slot to realize emissions that live code performs via
+    asyncio timer callbacks.  Headers are forwarded immediately on receive and do
+    not need the clock.
     """
     for _ in range(n):
-        if (tr._in_lc[ts] is None and not tr._in_head_queue[ts]
-                and not tr._in_term_pending[ts]):
+        if tr._in_lc[ts] is None and not tr._in_term_pending[ts]:
             break
         tr._deliver_slot(ts)
 
@@ -369,9 +369,9 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
 
     def test_ts1_voice_delivered_to_ipsc_while_ts2_inactive(self):
         tr, ipsc, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        tr._deliver_slot(1)   # clocked HEAD
+        tr.hbp_voice_received(_dmrd_head(ts=1))   # HEAD forwarded immediately
+        self.assertEqual(len(ipsc.sent), 1)
+        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))   # buffered
         tr._deliver_slot(1)   # clocked voice burst
         self.assertEqual(len(ipsc.sent), 2)
 
@@ -385,32 +385,29 @@ class TestInboundTimeslotIsolation(unittest.TestCase):
         tr.hbp_voice_received(_dmrd_term(ts=2))
         _drain(tr, 1)
         _drain(tr, 2)
-        # Each TS clocks out HEAD + 1 voice burst + TERM = 3; 6 total.
+        # Each TS: HEAD (immediate) + 1 clocked voice burst + clocked TERM = 3; 6 total.
         self.assertEqual(len(ipsc.sent), 6)
 
     def test_rtp_seq_tracked_per_ts(self):
         tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
-        tr.hbp_voice_received(_dmrd_head(ts=2))
-        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))   # pos 0
-        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=1))   # pos 1
-        tr._deliver_slot(1)   # HEAD  → seq 1
+        tr.hbp_voice_received(_dmrd_head(ts=1))                 # HEAD → seq 1 (immediate)
+        tr.hbp_voice_received(_dmrd_head(ts=2))                 # TS2 HEAD → seq 1 (immediate)
+        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))   # pos 0 buffered
+        tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=1))   # pos 1 buffered
         tr._deliver_slot(1)   # voice → seq 2
         tr._deliver_slot(1)   # voice → seq 3
-        tr._deliver_slot(2)   # TS2 HEAD → seq 1
         # RTP seq increments once per emitted frame, independently per timeslot.
         self.assertEqual(tr._in_rtp_seq[1], 3)
         self.assertEqual(tr._in_rtp_seq[2], 1)
 
     def test_rtp_ts_advances_480_per_slot(self):
         # RTP timestamp advances by 480 ticks (8 kHz × 60 ms) per delivered VOICE
-        # slot; headers do not advance it (they carry no audio time).
+        # slot; the header does not advance it (it carries no audio time).
         tr, _, _ = _make_tr()
-        tr.hbp_voice_received(_dmrd_head(ts=1))
+        tr.hbp_voice_received(_dmrd_head(ts=1))   # HEAD forwarded; RTP ts NOT advanced
         initial_ts = tr._in_rtp_ts[1]
+        self.assertEqual(initial_ts, 0)
         tr.hbp_voice_received(_dmrd_voice(ts=1, voice_seq=0))
-        tr._deliver_slot(1)   # HEAD — RTP timestamp NOT advanced
-        self.assertEqual(tr._in_rtp_ts[1], initial_ts)
         tr._deliver_slot(1)   # voice slot → +480
         self.assertEqual(tr._in_rtp_ts[1], (initial_ts + 480) & 0xFFFFFFFF)
         tr._deliver_slot(1)   # buffer empty → synthesized silence, still +480

@@ -7,9 +7,14 @@ of every GROUP_VOICE packet we send to IPSC.  Reports the header->voice gap, the
 inter-burst cadence, voice-in vs voice-out (tail clipping), and the
 last-voice->TERM gap.
 
-This measures OUR output shape so we can (a) demonstrate the ~300 ms void / tail
-clip in the current design and (b) prove the uniform-delay rewrite produces the
-native 60 ms grid.
+This measures OUR output shape: that voice comes out on a clean, contiguous 60 ms
+grid (no synthesized-silence dropouts), and that the terminator trails the last
+buffered voice burst rather than clipping the call tail.
+
+Note: the header is forwarded immediately and the voice clock is anchored to the
+first voice burst, so the reported header->voice gap is intentionally inflated by
+jitter_buffer_depth relative to the source — that delay is what buys the jitter
+lead.  See theory_of_operation.md section 7.8.
 
     cd /home/cort/ipsc2hbp && source venv/bin/activate
     python -m tests.timing_harness
@@ -108,7 +113,7 @@ def _report(events, voice_in):
     print('\n--- metrics ---')
     if heads and voices:
         print(f'  last HEAD -> first voice : {voices[0] - heads[-1]:7.1f} ms   '
-              '(native ~60; current design inflates by jitter depth)')
+              '(header immediate; voice delayed by jitter_buffer_depth)')
     if len(voices) > 1:
         deltas = [voices[i] - voices[i - 1] for i in range(1, len(voices))]
         print(f'  voice cadence            : '

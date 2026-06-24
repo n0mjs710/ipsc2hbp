@@ -193,10 +193,11 @@ passphrase = "passw0rd"
 hbp_mode = "TRACKING"
 
 # HBP→IPSC jitter buffer depth, in 60 ms TDMA slots (default 2 = 120 ms).
-# The whole call (voice headers, voice, terminator) is clocked out to IPSC at a
-# uniform delay of this many slots, so the source's own header→voice spacing is
-# preserved and the repeater sees a continuous 60 ms grid.  Deeper = absorbs more
-# inbound jitter at the cost of that much added call-setup latency:
+# Inbound voice is clocked out to IPSC at this delay, anchored to the first voice
+# burst so every burst gets the full lead, giving the repeater a continuous 60 ms
+# grid.  (The voice header is forwarded immediately, and the terminator is held
+# until the buffered tail drains, so the call tail is not clipped.)  Deeper =
+# absorbs more inbound jitter at the cost of that much added call-setup latency:
 #   1 → 60 ms   (clean low-latency LAN link)
 #   2 → 120 ms  (default; absorbs the jitter seen on typical paths)
 #   3-8 → 180-480 ms (marginal / high-latency RF backhaul — trade delay for
