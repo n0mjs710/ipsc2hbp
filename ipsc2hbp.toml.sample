@@ -15,8 +15,10 @@ log_level = "INFO"
 #   Use this when you control the IPSC master role (the typical deployment).
 #
 # PEER: ipsc2hbp registers with an existing IPSC master (e.g., a repeater
-#   configured as master, or another MOTOTRBO system you do not control).
-#   All traffic on the IPSC system is visible and forwarded to HBP.
+#   or c-Bridge configured as master, or another MOTOTRBO system you do not
+#   control) and joins the full IPSC mesh — it learns the other peers from the
+#   master and talks to them directly, peer-to-peer, the way IPSC delivers
+#   voice.  All traffic on the IPSC system is visible and forwarded to HBP.
 #   Peer mode also enables passive capture of SYSTEM_MAP packets (0x9C/0x9D),
 #   which are logged at INFO with full hex when observed — useful for protocol
 #   research while running CPS against the repeater master.

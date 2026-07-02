@@ -9,7 +9,7 @@
 On the IPSC side it operates in one of two modes selected by configuration:
 
 - **MASTER mode** (default): ipsc2hbp acts as the IPSC master node, accepting up to 14 simultaneous IPSC peers (repeaters). This is the typical deployment when you control the IPSC system.
-- **PEER mode**: ipsc2hbp registers with an existing IPSC master (e.g., a repeater configured as master). All traffic on that IPSC system is forwarded to HBP. Peer mode is also useful for protocol research: SYSTEM_MAP packets (0x9C/0x9D) are logged at INFO with full hex when observed.
+- **PEER mode**: ipsc2hbp registers with an existing IPSC master (e.g., a repeater or c-Bridge configured as master) and participates in the **full IPSC mesh** — it learns the other peers from the master's peer list, registers and keepalives with each of them peer-to-peer, and accepts voice directly from any of them (IPSC delivers voice peer-to-peer, not through the master). All traffic on that IPSC system is forwarded to HBP. Peer mode is also useful for protocol research: SYSTEM_MAP packets (0x9C/0x9D) are logged at INFO with full hex when observed.
 
 The previous solution for this problem was two separate Python 2 processes — `IPSC_Bridge` from DMRlink and `HB_Bridge` from HBlink — communicating over a local UDP socket using an intermediate AMBE frame format. `ipsc2hbp` replaces both with a single Python 3 process that translates directly in memory, with no inter-process communication.
 
@@ -246,6 +246,10 @@ ipsc2hbp initiates the connection and drives the keepalive cadence.
 ```
 
 After `MASTER_REG_REPLY` is received, `CallTranslator.peer_joined()` is called (first time or after re-registration).
+
+**Full mesh:** IPSC is a full mesh — after the master returns `PEER_LIST_REPLY`, every repeater exchanges voice and data **directly, peer-to-peer**, not through the master. ipsc2hbp parses the peer list into a peer table and, for each peer, sends `PEER_REG_REQ` (and answers inbound `PEER_REG_REQ` with `PEER_REG_REPLY`) to bring the peer-to-peer link up, then maintains it with `PEER_ALIVE_REQ`/`PEER_ALIVE_REPLY`. Inbound `GROUP_VOICE` is accepted from the master **or any peer in the list**; outbound voice (HBP→IPSC) is fanned out to the master and every connected peer. Voice received over IPSC is delivered only to HBP — it is never re-sent onto IPSC, because the originating repeater already flooded it to the whole mesh.
+
+**Duplicate suppression (per-timeslot source lock):** a call can reach us twice at once — e.g. a c-Bridge or DMRgateway re-injecting the same call from a second path. The first source to key a timeslot owns it; other sources' frames are dropped while it is actively talking (`VOICE_LOCK_TIMEOUT`, 0.5 s), and their mid-call bursts are dropped for a guard window after it ends (`VOICE_DUP_GUARD`, 2 s — the lagging duplicate's tail). A genuine new call always opens with `VOICE_HEAD`, which is let through. Without this lock the two interleaved RTP streams make the translator churn — a spurious "late entry"/end on every frame.
 
 **Keepalive:** every `keepalive_interval` seconds ipsc2hbp sends `MASTER_ALIVE_REQ` and increments a missed-reply counter. When `MASTER_ALIVE_REPLY` is received the counter resets to zero. Any reply from the master (REG_REPLY, PEER_LIST_REPLY, ALIVE_REPLY) resets the counter.
 
