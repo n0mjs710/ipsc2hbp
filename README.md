@@ -53,7 +53,17 @@ python ipsc2hbp.py -c ipsc2hbp.toml
 
 This work represents the author's interpretation of the Motorola MOTOTRBO IPSC protocol and the HomeBrew Repeater Protocol. IPSC protocol behavior is derived from reverse-engineering work originally done in DMRlink. HBP behavior is derived from HBlink, HBlink3, and HBlink4. Motorola and MOTOTRBO are registered trademarks of Motorola Solutions, Inc. This project is not affiliated with Motorola Solutions in any way.
 
-**WARRANTY:** None. Use at your own risk.
+### No Support Is Provided
+
+This is not commercial software. It is provided free of charge. The author(s)
+received no compensation for creating and maintaining it. Countless hours over
+many years have gone into the this. If you have problems, the author will try
+to help if possible, please have no expectations for support. There is no online
+group, such as DVSwitch or groups.io that is an "official" outlet for information.
+The only definitive source of information is me. Beware of others claiming to
+be authoritative. User-based mutual support is great, and I'm all for it. But
+please understand, this is what they are, and I have not sanctioned anyone to be
+the "home" of my software packages.
 
 ***0x49 DE N0MJS***
 
