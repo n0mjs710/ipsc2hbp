@@ -40,7 +40,7 @@ Successful use of ipsc2hbp reuires a working knowlege of the unix command line i
 
 **GETTING STARTED:**
 
-The following will run ipsc2hbp in the glocal python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
+The following will run ipsc2hbp in the global python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
 
 ```
 pip install -r requirements.txt
