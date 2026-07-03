@@ -65,6 +65,15 @@ be authoritative. User-based mutual support is great, and I'm all for it. But
 please understand, this is what they are, and I have not sanctioned anyone to be
 the "home" of my software packages.
 
+## GitHub "Issues"
+
+Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before 
+opening one, make sure that it is a true problem with the software and not merely
+a misconfiguration, or contention around a feature that was not supported. Isssues
+should never be used to ask for or recommend features. Issues that do not include
+complete details, relevent tracebacks, error messages, configuration snippets, 
+operatrional conditions surrounding the event, etc. will be closed without action.
+
 ***0x49 DE N0MJS***
 
 Additional IPSC packet structure knowledge — FLAGS byte field names, MODE byte slot states, IPSC version field encoding, call monitor payload layouts, remote programming opcodes, MNIS/Wireline identification, and more — was derived from study of **node-dmr-lib** by rick51231: https://github.com/rick51231/node-dmr-lib
