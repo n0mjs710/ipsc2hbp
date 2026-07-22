@@ -44,6 +44,7 @@ _wire = logging.getLogger('hbp.wire')
 _KA_INTERVAL = 5.0    # seconds between RPTPING
 _MAX_KA_AGE  = 15.0   # seconds without pong → disconnect (3 × KA_INTERVAL)
 _RECONNECT_DELAY = 5.0
+_LOGIN_TIMEOUT   = 15.0   # seconds for the whole handshake to complete before giving up
 
 
 def _build_rptc(cfg: Config) -> bytes:
@@ -82,6 +83,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
         self._state      = 'LOGIN'   # LOGIN → AUTH_SENT → CONFIG_SENT → [OPTIONS_SENT] → CONNECTED
         self._last_pong  = 0.0
         self._ping_task  = None
+        self._login_timer = None
         self._done       = asyncio.Event()
 
     # ------------------------------------------------------------------
@@ -91,6 +93,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport):
         self._transport = transport
         self._send_raw(HBPF_RPTL + self._radio_id_b)
+        self._arm_login_timer()
         log.info('HBP: → RPTL  radio_id=%d', self._cfg.hbp_repeater_id)
 
     def connection_lost(self, exc):
@@ -133,6 +136,29 @@ class _HBPProtocol(asyncio.DatagramProtocol):
     # RPTACK state machine
     # ------------------------------------------------------------------
 
+    def _arm_login_timer(self):
+        """(Re)arm the login-handshake watchdog. Covers every pre-CONNECTED
+        state: if the master never answers the RPTL (or stalls mid-handshake),
+        this fires and drives a disconnect → reconnect instead of waiting on
+        wait_done() forever."""
+        if self._login_timer:
+            self._login_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._login_timer = loop.call_later(_LOGIN_TIMEOUT, self._on_login_timeout)
+
+    def _cancel_login_timer(self):
+        if self._login_timer:
+            self._login_timer.cancel()
+            self._login_timer = None
+
+    def _on_login_timeout(self):
+        self._login_timer = None
+        if self._state in ('CONNECTED', 'DISCONNECTED'):
+            return
+        log.error('HBP: login handshake timed out (state %s, %.0fs) — reconnecting',
+                  self._state, _LOGIN_TIMEOUT)
+        self._disconnect(send_rptcl=False)
+
     def _on_rptack(self, data: bytes):
         if self._state == 'LOGIN':
             # RPTACK+salt: challenge
@@ -145,6 +171,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
             )
             self._send_raw(HBPF_RPTK + self._radio_id_b + digest)
             self._state = 'AUTH_SENT'
+            self._arm_login_timer()
             log.info('HBP: ← RPTACK+salt  → RPTK')
 
         elif self._state == 'AUTH_SENT':
@@ -152,6 +179,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
             rptc = _build_rptc(self._cfg)
             self._send_raw(rptc)
             self._state = 'CONFIG_SENT'
+            self._arm_login_timer()
             log.info('HBP: ← RPTACK(auth)  → RPTC (%d bytes)', len(rptc))
 
         elif self._state == 'CONFIG_SENT':
@@ -160,6 +188,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
                 opts = self._cfg.options.encode().ljust(300, b'\x00')[:300]
                 self._send_raw(HBPF_RPTO + self._radio_id_b + opts)
                 self._state = 'OPTIONS_SENT'
+                self._arm_login_timer()
                 log.info('HBP: ← RPTACK(config)  → RPTO  options=%r', self._cfg.options)
             else:
                 log.info('HBP: ← RPTACK(config)  CONNECTED to %s:%d',
@@ -176,6 +205,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
             log.debug('HBP: unexpected RPTACK in state %s', self._state)
 
     def _become_connected(self):
+        self._cancel_login_timer()
         self._state = 'CONNECTED'
         self._last_pong = time()
         loop = asyncio.get_event_loop()
@@ -226,6 +256,7 @@ class _HBPProtocol(asyncio.DatagramProtocol):
             self._send_raw(HBPF_RPTCL + self._radio_id_b)
             log.info('HBP: → RPTCL (clean disconnect)')
         self._state = 'DISCONNECTED'
+        self._cancel_login_timer()
         if self._ping_task:
             self._ping_task.cancel()
             self._ping_task = None
