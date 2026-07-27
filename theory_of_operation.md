@@ -587,6 +587,24 @@ Two per-timeslot structures feed the clock each slot:
 
 **Stream end / dead-man.** If `MAX_SYNTH_BURSTS` (6 ≈ 360 ms) consecutive slots are synthesized silence with no real audio, the clock synthesizes a `VOICE_TERM` and ends the call. A separate coarse watchdog (`check_call_timeouts`) clears any call still hung after ~2 s as hygiene.
 
+### 7.9 What HBP→IPSC reconstructs — and why IPSC needs it
+
+Sections 7.6–7.8 describe *how* inbound voice is clocked and gap-filled. This section steps back to the *why*, because it is the source of a common misconception: that the jitter buffer and its silence/terminator synthesis are optional smoothing. They are not. They exist because **the two sides expect fundamentally different things from a voice stream.**
+
+The receiving end on the **HBP** side is a smart software client (MMDVMHost, a hotspot, a repeater running the HBP protocol). It reassembles the audio itself: it tolerates jitter, absorbs lost or out-of-order bursts, and derives call identity from whatever it can — the per-frame headers, the embedded LC, or the stream ID. If a burst is missing, its own audio engine copes. So HBP does not *need* the stream to be complete or perfectly clocked; the endpoint fills in the rest. Much of what a full DMR stream carries is therefore redundant on the HBP wire, and the HBP server forwards accordingly (for example, collapsing the radio's 2–3 redundant `VOICE_HEAD`s down to one — see section 7.8).
+
+The receiving end on the **IPSC** side is a **MOTOTRBO repeater**, which expects the stream a peer repeater would have produced over the air: a clean, continuous 60 ms grid of well-formed DMR superframes, each burst self-describing, with the call framed by a header and a terminator. It does not reconstruct — it plays what it is handed. Hand it a gapped, unframed, or unterminated stream and it mis-renders or hangs.
+
+**Why the IPSC side is built this way.** IPSC was designed for reliable, deterministic transport — managed private networks and leased lines, where packets don't drop, reorder, or arrive late. On that kind of network the repeater never *needs* to be defensive, and it isn't: there is no receive-side jitter buffer, the superframe grid is assumed intact each 60 ms, and the full-mesh flood only makes sense on a small, low-loss LAN. The amateur reality is the opposite — unlicensed wireless backhaul, cell modems, residential internet, arbitrary latency and loss. Countering that mismatch is essentially the translator's whole reason to exist: the jitter buffer, silence fill, and synthesized terminator stand in for the transport guarantees the MOTOTRBO side assumes it already has. (It is also why the outbound IPSC→HBP path needs none of this — a stream arriving from IPSC already met the repeater's stricter timing to exist, so the forgiving HBP endpoint receives it straight through; see section 7.8.)
+
+The translator therefore has to **rebuild, for IPSC, the structure that HBP left implicit** because HBP's endpoint would have supplied it. Concretely:
+
+- **Embedded LC in every superframe (late entry).** Every voice superframe on IPSC must carry the embedded LC fragments (bursts B–E) that let a radio join a call already in progress — this *is* DMR's late-entry mechanism. So on the first voice burst of any call, the translator reconstructs the 9-byte LC from the `src`/`dst` present in the DMRD header (`LC_OPT + dst + src`), regenerates the embedded LC fragments (`encode_emblc`), and carries them in the delivered bursts (section 7.6). This happens whether or not a `VOICE_HEAD` was ever seen — if the head was missed (true late entry, or a head lost on the wire), the LC is still rebuilt from the voice stream itself so IPSC gets a fully-formed, joinable call.
+- **Missing bursts → AMBE silence (section 7.8).** IPSC needs an unbroken 60 ms grid; a lost or late burst is replaced with synthesized AMBE silence for that superframe position so the grid never stalls or drifts.
+- **A terminator, always (section 7.8).** IPSC frames a call with `VOICE_TERM`. A genuine terminator is held until the buffered tail drains and then emitted; if the stream simply stops (RF dropout, lost terminator), the dead-man synthesizes one after `MAX_SYNTH_BURSTS` of silence so the repeater still sees a clean call end. A terminator arriving with no head we ever saw still gets a reconstructed LC so the end is well-formed.
+
+**The one thing we never reconstruct: the `VOICE_HEAD` packet itself.** Headers are *forwarded* when genuinely received (each of the radio's redundant heads relayed faithfully — section 7.7), but a standalone `VOICE_HEAD` is **never fabricated**. On late entry there is no head to forward, and none is invented; the embedded LC in the voice superframe carries the call identity instead, which is exactly how a real radio joins a call in progress. Synthesizing a head would misrepresent the call's true start to anything downstream that logs or times it — the embedded-LC path conveys the same identity without that lie.
+
 ---
 
 ## 8. LC Word Structure
@@ -685,7 +703,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 | Multiple HBP upstream masters | One network server only |
 | Conference, bridging, routing | Not this tool |
 | ACL / filtering | Upstream master's responsibility |
-| Burst timeout watchdog (synthesize VOICE_TERM) | Not implemented; repeater is responsible for call termination |
+| Reconstructing IPSC call structure from HBP voice (embedded LC / late entry, AMBE silence fill, synthesized VOICE_TERM) | In scope and implemented — see section 7.9. IPSC expects a complete, self-framed stream; HBP's endpoint does not, so the translator rebuilds what HBP left implicit |
 
 ---
 
