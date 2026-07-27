@@ -1,7 +1,7 @@
 ## PROJECT: IPSC to HomeBrew Protocol Translator ##
 **C version available: ipsc2hbpc**
 
-**NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it invovles painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
+**NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it involves painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
 
 **PURPOSE:** A single, small Python 3 daemon that connects a Motorola MOTOTRBO IPSC system to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
 
@@ -37,11 +37,11 @@ This is not a general-purpose bridge, reflector, or network controller. It does 
 
 **PREREQUISITES**
 
-Successful use of ipsc2hbp reuires a working knowlege of the unix command line interace (CLI) and Python, including python virtual environemens (venv). Users without thse skills may find it challenging to be successful.
+Successful use of ipsc2hbp requires a working knowledge of the Unix command line interface (CLI) and Python, including Python virtual environments (venv). Users without these skills may find it challenging to be successful.
 
 **GETTING STARTED:**
 
-The following will run ipsc2hbp in the global python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
+The following will run ipsc2hbp in the global Python environment, but it is highly recommended to use a Python virtual environment. Installation instructions are located in INSTALL.md.
 
 ```
 pip install -r requirements.txt
@@ -58,7 +58,7 @@ This work represents the author's interpretation of the Motorola MOTOTRBO IPSC p
 
 This is not commercial software. It is provided free of charge. The author(s)
 received no compensation for creating and maintaining it. Countless hours over
-many years have gone into the this. If you have problems, the author will try
+many years have gone into this. If you have problems, the author will try
 to help if possible, please have no expectations for support. There is no online
 group, such as DVSwitch or groups.io that is an "official" outlet for information.
 The only definitive source of information is me. Beware of others claiming to
@@ -70,10 +70,10 @@ the "home" of my software packages.
 
 Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before
 opening one, make sure that it is a true problem with the software and not merely
-a misconfiguration, or contention around a feature that was not supported. Isssues
+a misconfiguration, or contention around a feature that was not supported. Issues
 should never be used to ask for or recommend features. Issues that do not include
-complete details, relevent tracebacks, error messages, configuration snippets,
-operatrional conditions surrounding the event, etc. will be closed without action.
+complete details, relevant tracebacks, error messages, configuration snippets,
+operational conditions surrounding the event, etc. will be closed without action.
 
 ***0x49 DE N0MJS***
 
