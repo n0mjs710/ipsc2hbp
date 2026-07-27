@@ -41,7 +41,7 @@ Successful use of ipsc2hbp reuires a working knowlege of the unix command line i
 
 **GETTING STARTED:**
 
-The following will run ipsc2hbp in the glocal python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
+The following will run ipsc2hbp in the global python enfironent, but it is highly recommended to use a Python virtual environment. Installation intructinos are located in INSTALL.md.
 
 ```
 pip install -r requirements.txt
@@ -54,7 +54,26 @@ python ipsc2hbp.py -c ipsc2hbp.toml
 
 This work represents the author's interpretation of the Motorola MOTOTRBO IPSC protocol and the HomeBrew Repeater Protocol. IPSC protocol behavior is derived from reverse-engineering work originally done in DMRlink. HBP behavior is derived from HBlink, HBlink3, and HBlink4. Motorola and MOTOTRBO are registered trademarks of Motorola Solutions, Inc. This project is not affiliated with Motorola Solutions in any way.
 
-**WARRANTY:** None. Use at your own risk.
+### No Support Is Provided
+
+This is not commercial software. It is provided free of charge. The author(s)
+received no compensation for creating and maintaining it. Countless hours over
+many years have gone into the this. If you have problems, the author will try
+to help if possible, please have no expectations for support. There is no online
+group, such as DVSwitch or groups.io that is an "official" outlet for information.
+The only definitive source of information is me. Beware of others claiming to
+be authoritative. User-based mutual support is great, and I'm all for it. But
+please understand, this is what they are, and I have not sanctioned anyone to be
+the "home" of my software packages.
+
+### GitHub "Issues"
+
+Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before
+opening one, make sure that it is a true problem with the software and not merely
+a misconfiguration, or contention around a feature that was not supported. Isssues
+should never be used to ask for or recommend features. Issues that do not include
+complete details, relevent tracebacks, error messages, configuration snippets,
+operatrional conditions surrounding the event, etc. will be closed without action.
 
 ***0x49 DE N0MJS***
 
