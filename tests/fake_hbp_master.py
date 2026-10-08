@@ -143,7 +143,7 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
             print(f'[fake-master] RPTC in unexpected state {self._state}')
             return
         peer_id = data[4:8]
-        callsign = data[8:16].rstrip(b'\x00').decode(errors='replace')
+        callsign = data[8:16].rstrip(b'\x00 ').decode(errors='replace')
         print(f'[fake-master] ← RPTC  {len(data)} bytes  callsign={callsign!r}')
         reply = HBPF_RPTACK + peer_id
         self._send(reply, addr)
@@ -152,7 +152,7 @@ class FakeHBPMaster(asyncio.DatagramProtocol):
 
     def _on_rpto(self, data: bytes, addr):
         peer_id = data[4:8] if len(data) >= 8 else (self._peer_id or b'\x00\x00\x00\x00')
-        options = data[8:].rstrip(b'\x00').decode(errors='replace') if len(data) > 8 else ''
+        options = data[8:].rstrip(b'\x00 ').decode(errors='replace') if len(data) > 8 else ''
         print(f'[fake-master] ← RPTO  options={options!r}')
         if self._state == 'WAIT_RPTO':
             self._send(HBPF_RPTACK + peer_id, addr)

@@ -48,26 +48,51 @@ _LOGIN_TIMEOUT   = 15.0   # seconds for the whole handshake to complete before g
 
 
 def _build_rptc(cfg: Config) -> bytes:
-    """Build the 302-byte RPTC config blob (confirmed layout from hblink4)."""
+    """Build the 302-byte RPTC config blob (confirmed layout from hblink4).
+
+    Padded exactly as DMRGateway pads it. DMRGateway builds the whole record
+    with one sprintf:
+
+      "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s"
+
+    which is three conventions, not one -- left/space for text, right/zero for
+    the numeric fields, right/space for latitude and longitude. HBlink3's peer
+    mode pads the same way (str.ljust, str.rjust('0')).
+
+    Not NUL, which is what this port used to do (copied from HBlink4's outbound
+    side): masters slice the blob positionally, so NUL padding logs in and
+    passes traffic, but it leaves NULs inside fields consumers treat as text.
+    str.strip() removes whitespace and not NUL, so they ride through a master's
+    decode into its dashboard JSON as "W0UK\u0000\u0000\u0000\u0000",
+    float() on a padded latitude raises ValueError, and an exact callsign ACL
+    pattern stops matching the repeater it names.
+
+    Overlong values are truncated to the field width, as the ".N" precision in
+    each of those conversions does.
+    """
     radio_id_b = cfg.hbp_repeater_id.to_bytes(4, 'big')
-    def enc(s, n): return s.encode().ljust(n, b'\x00')[:n]
+
+    def text(s, n):  return s.encode()[:n].ljust(n)           # "%-N.Ns"
+    def num(s, n):   return s.encode()[:n].rjust(n, b'0')     # "%0Nu"
+    def dec(s, n):   return s.encode()[:n].rjust(n)           # "%N.Ns"
+
     return (
         HBPF_RPTC
         + radio_id_b
-        + enc(cfg.callsign,    8)
-        + enc(cfg.rx_freq,     9)
-        + enc(cfg.tx_freq,     9)
-        + enc(cfg.tx_power,    2)
-        + enc(cfg.colorcode,   2)
-        + enc(cfg.latitude,    8)
-        + enc(cfg.longitude,   9)
-        + enc(cfg.height,      3)
-        + enc(cfg.location,   20)
-        + enc(cfg.description,19)
-        + RPTC_SLOTS_VALUE
-        + enc(cfg.url,       124)
-        + enc(cfg.software_id,40)
-        + enc(cfg.package_id, 40)
+        + text(cfg.callsign,     8)    # %-8.8s
+        + num(cfg.rx_freq,       9)    # %09u
+        + num(cfg.tx_freq,       9)    # %09u
+        + num(cfg.tx_power,      2)    # %02u
+        + num(cfg.colorcode,     2)    # %02u
+        + dec(cfg.latitude,      8)    # %8.8s
+        + dec(cfg.longitude,     9)    # %9.9s
+        + num(cfg.height,        3)    # %03d
+        + text(cfg.location,    20)    # %-20.20s
+        + text(cfg.description, 19)    # %-19.19s
+        + RPTC_SLOTS_VALUE             # %c
+        + text(cfg.url,        124)    # %-124.124s
+        + text(cfg.software_id, 40)    # %-40.40s
+        + text(cfg.package_id,  40)    # %-40.40s
     )
 
 
@@ -185,7 +210,14 @@ class _HBPProtocol(asyncio.DatagramProtocol):
         elif self._state == 'CONFIG_SENT':
             # RPTACK: config accepted — send RPTO if options are configured
             if self._cfg.options:
-                opts = self._cfg.options.encode().ljust(300, b'\x00')[:300]
+                # Variable-length by convention: the master reads the rest of
+                # the datagram as the string, so send exactly what we have and
+                # no padding (DMRGateway writes strlen(options) + 8). Padding
+                # to 300 appends NULs to the last talkgroup, which a master
+                # that parses the subscription must defend against -- HBlink4
+                # strips them, and without that its int() raises and the
+                # parser falls back to denying every talkgroup on both slots.
+                opts = self._cfg.options.encode()[:300]
                 self._send_raw(HBPF_RPTO + self._radio_id_b + opts)
                 self._state = 'OPTIONS_SENT'
                 self._arm_login_timer()

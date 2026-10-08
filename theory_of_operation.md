@@ -359,7 +359,7 @@ The HBP handshake is driven by the repeater/client side (us). Authentication use
 ← RPTACK + radio_id(4)                                     [auth accepted]
 → RPTC + config(298)                                       [302 bytes total]
 ← RPTACK + radio_id(4)                                     [config accepted]
-→ RPTO + radio_id(4) + options(300)                        [308 bytes; only if options != ""]
+→ RPTO + radio_id(4) + options                             [8 + len(options); only if options != ""]
 ← RPTACK                                                   [options accepted → CONNECTED]
 ```
 
@@ -369,7 +369,37 @@ There is no MSTACK packet in any HBlink version. The `RPTACK` is used at every s
 
 ### 6.2 RPTC Config Blob (302 bytes)
 
-All fields are null-byte padded (not space-padded). BrandMeister is strict about field widths.
+Every field is padded to exactly the width below — BrandMeister is strict about
+the widths — using the same three conventions DMRGateway uses. DMRGateway builds
+the entire record with one sprintf:
+
+```
+"%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s"
+```
+
+| convention | fill | fields |
+|---|---|---|
+| `%-N.Ns` | left-justified, **space** | callsign, location, description, url, software_id, package_id |
+| `%0Nu` | right-justified, **zero** | rx_freq, tx_freq, tx_power, colorcode, height |
+| `%N.Ns` | right-justified, **space** | latitude, longitude |
+
+So a power of `5` goes out as `05`, a height of `10` as `010`, and a latitude of
+`38.8500` as `" 38.8500"` (leading space). DMRGateway pre-formats lat/long with
+`%08f`/`%09f`, so its own strings always fill the width and that
+right-justification never shows; ours come from config and can be shorter.
+Overlong values are truncated to the field width, as the `.N` precision does.
+
+NUL fill — which this port used originally, copied from HBlink4's outbound side
+— is the one thing that must not be used. Masters slice the blob positionally,
+so it logs in and passes traffic normally; what it breaks is everything
+downstream that treats these bytes as text. `str.strip()` removes whitespace but
+not NUL, so the NULs ride through a master's decode into its dashboard JSON
+(`"W0UK\u0000\u0000\u0000\u0000"`), `float("38.8500\x00")` raises
+`ValueError`, and an HBlink4 ACL pattern anchored on the callsign no longer
+matches.
+
+RPTO carries no padding at all — the master reads the remainder of the datagram
+as the options string, and DMRGateway writes `strlen(options) + 8`.
 
 ```
 Bytes   0–  3:  b'RPTC'
