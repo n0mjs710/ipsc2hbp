@@ -108,15 +108,12 @@ RPTC_PACKAGE_ID = slice(262, 302)  # 40 bytes
 #   9. Recv RPTACK + rptr_id(4)  → options accepted → CONNECTED
 #   (steps 8–9 are skipped when options is empty; CONNECTED after step 7)
 #
-# RPTC padding follows DMRGateway's single-sprintf config record:
-#   "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s"
+# RPTC padding, per DMRGateway's config-blob sprintf
+#   "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s":
 #   text fields     -> left-justified, space-filled
-#   numeric fields  -> right-justified, ZERO-filled  (power "5" goes out as "05")
+#   numeric fields  -> right-justified, zero-filled  (power "5" goes out as "05")
 #   lat/long        -> right-justified, space-filled
-# NOT NUL. (HBlink4's outbound side NUL-padded, which is where this port first
-# took its padding from; that was the outlier, and the NULs it left inside text
-# fields survived consumers' str.strip() all the way to the dashboard.)
-# RPTO is not padded at all — it is read as the rest of the datagram.
+# Never NUL. RPTO is unpadded — it is read as the rest of the datagram.
 #
 # NOTE: senders pad; receivers must not assume it. Strip NUL as well as
 # whitespace off any text field arriving from a peer.

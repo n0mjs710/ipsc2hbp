@@ -389,14 +389,12 @@ So a power of `5` goes out as `05`, a height of `10` as `010`, and a latitude of
 right-justification never shows; ours come from config and can be shorter.
 Overlong values are truncated to the field width, as the `.N` precision does.
 
-NUL fill — which this port used originally, copied from HBlink4's outbound side
-— is the one thing that must not be used. Masters slice the blob positionally,
-so it logs in and passes traffic normally; what it breaks is everything
-downstream that treats these bytes as text. `str.strip()` removes whitespace but
-not NUL, so the NULs ride through a master's decode into its dashboard JSON
-(`"W0UK\u0000\u0000\u0000\u0000"`), `float("38.8500\x00")` raises
-`ValueError`, and an HBlink4 ACL pattern anchored on the callsign no longer
-matches.
+NUL fill must never be used. A master slices the blob positionally, so it
+connects and passes traffic; what it breaks is everything downstream that reads
+these bytes as text. `str.strip()` removes whitespace but not NUL, so the NULs
+reach a master's dashboard JSON as `"W0UK\u0000\u0000\u0000\u0000"`,
+`float("38.8500\x00")` raises `ValueError`, and an HBlink4 ACL pattern anchored
+on the callsign stops matching.
 
 RPTO carries no padding at all — the master reads the remainder of the datagram
 as the options string, and DMRGateway writes `strlen(options) + 8`.

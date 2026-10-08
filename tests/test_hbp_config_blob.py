@@ -1,22 +1,10 @@
 #!/usr/bin/env python
 #
-# The RPTC config blob and the RPTO options string as they go on the wire.
-#
-# This port originally padded every field with NUL, copied from HBlink4's
-# outbound side. Every other client space-pads: DMRGateway builds the whole blob
-# from one "%-8.8s%09u%09u..." sprintf, and HBlink3's peer mode uses
-# str.ljust(). A master slices the blob positionally, so NUL padding logs in and
-# passes traffic -- which is why it went unnoticed -- but it leaves NULs inside
-# fields consumers treat as text. str.strip() removes whitespace and not NUL, so
-# they survive a master's decode into its dashboard JSON as
-# "W0UK\u0000\u0000\u0000\u0000", float() on a padded latitude raises
-# ValueError, and an exact callsign ACL pattern stops matching.
-#
-# RPTO is a separate case: it is variable-length by convention (the master reads
-# the rest of the datagram), so it carries no padding at all. Padded to a fixed
-# 300 bytes, the trailing NULs land on the last talkgroup in the subscription --
-# HBlink4 strips them back off, and a master that does not would raise in int()
-# and deny every talkgroup on both slots.
+# The RPTC config blob and the RPTO options string as they go on the wire:
+# field widths, and the three padding conventions taken from DMRGateway's
+# config-blob sprintf. NUL fill is the failure these pin against -- it connects
+# (the blob is sliced positionally) but leaves NULs in fields consumers read as
+# text, where str.strip() does not remove them.
 #
 # Run from the repo root:   venv/bin/python -m unittest discover -s tests
 
@@ -57,17 +45,15 @@ class TestRPTCBlob(unittest.TestCase):
         self.assertNotIn(0, self.blob[8:])
 
     def test_numeric_fields_are_zero_filled_on_the_left(self):
-        # DMRGateway's "%02u"/"%03d": a colour code of 1 is "01", not "1 ";
-        # a height of 10 metres is "010". test.toml carries tx_power "25",
-        # colorcode "1", height "10".
+        # "%02u"/"%03d": colour code 1 is "01", height 10 is "010".
+        # test.toml carries tx_power "25", colorcode "1", height "10".
         self.assertEqual(self.blob[RPTC_TX_POWER], b'25')
         self.assertEqual(self.blob[RPTC_COLORCODE], b'01')
         self.assertEqual(self.blob[RPTC_HEIGHT], b'010')
 
     def test_lat_long_are_space_filled_on_the_left(self):
-        # "%8.8s"/"%9.9s" right-justify. DMRGateway's own values always fill
-        # the width (it pre-formats with "%08f"/"%09f"), so this only shows on
-        # a shorter config value like "38.8500".
+        # "%8.8s"/"%9.9s" right-justify; visible only on a value shorter than
+        # the field, as DMRGateway's "%08f"/"%09f" output always fills it.
         self.assertEqual(self.blob[RPTC_LATITUDE], b' 38.8500')
         self.assertEqual(self.blob[RPTC_LONGITUDE], b'-097.6114')
 
@@ -84,10 +70,8 @@ class TestRPTCBlob(unittest.TestCase):
         self.assertEqual(float(self.blob[RPTC_LATITUDE].decode().strip()), 38.85)
 
     def test_blob_matches_dmrgateway_format_string(self):
-        # The whole record against DMRGateway's own sprintf, verbatim from
-        # DMRGateway.cpp. Python's % operator implements these conversions
-        # identically to C's printf, so this pins every field's justification
-        # and fill in one assertion rather than field by field.
+        # DMRGateway.cpp's format string verbatim. Python's % implements these
+        # conversions as C's printf does, pinning every field in one assertion.
         cfg = self.cfg
         expected = (
             "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c"
@@ -109,9 +93,8 @@ class TestRPTCBlob(unittest.TestCase):
 
 
 class TestRPTOOptions(unittest.TestCase):
-    # The options datagram is built inline in the RPTACK handler; this mirrors
-    # that construction so the wire shape is pinned without driving the whole
-    # handshake (tests/test_resilience.py covers the state machine).
+    # Mirrors the construction inlined in the RPTACK handler, pinning the wire
+    # shape without driving the handshake (test_resilience.py covers that).
     def _rpto(self, options):
         cfg = dataclasses.replace(_cfg(), options=options)
         return (HBPF_RPTO
@@ -125,8 +108,7 @@ class TestRPTOOptions(unittest.TestCase):
         self.assertEqual(pkt[8:], b'TS1=2,9;TS2=3120')
 
     def test_last_talkgroup_survives_an_int_conversion(self):
-        # The failure the padding used to cause downstream: the trailing NULs
-        # landed on the final talkgroup of the subscription.
+        # Padding this field would put the fill bytes on the final talkgroup.
         pkt = self._rpto('TS1=2,9;TS2=3120')
         last = pkt[8:].decode().split(';')[-1].split('=')[1].split(',')[-1]
         self.assertEqual(int(last), 3120)

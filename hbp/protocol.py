@@ -48,27 +48,19 @@ _LOGIN_TIMEOUT   = 15.0   # seconds for the whole handshake to complete before g
 
 
 def _build_rptc(cfg: Config) -> bytes:
-    """Build the 302-byte RPTC config blob (confirmed layout from hblink4).
+    """Build the 302-byte RPTC config blob.
 
-    Padded exactly as DMRGateway pads it. DMRGateway builds the whole record
-    with one sprintf:
+    Field padding matches DMRGateway's config-blob sprintf:
 
       "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s"
 
-    which is three conventions, not one -- left/space for text, right/zero for
-    the numeric fields, right/space for latitude and longitude. HBlink3's peer
-    mode pads the same way (str.ljust, str.rjust('0')).
+      text  "%-N.Ns"  left-justified, space-filled
+      num   "%0Nu"    right-justified, zero-filled
+      dec   "%N.Ns"   right-justified, space-filled
 
-    Not NUL, which is what this port used to do (copied from HBlink4's outbound
-    side): masters slice the blob positionally, so NUL padding logs in and
-    passes traffic, but it leaves NULs inside fields consumers treat as text.
-    str.strip() removes whitespace and not NUL, so they ride through a master's
-    decode into its dashboard JSON as "W0UK\u0000\u0000\u0000\u0000",
-    float() on a padded latitude raises ValueError, and an exact callsign ACL
-    pattern stops matching the repeater it names.
-
-    Overlong values are truncated to the field width, as the ".N" precision in
-    each of those conversions does.
+    Never NUL-filled: a server slices the blob positionally, so NUL padding
+    connects, but it leaves NULs inside fields consumers read as text.
+    Overlong values truncate to the field width.
     """
     radio_id_b = cfg.hbp_repeater_id.to_bytes(4, 'big')
 
@@ -210,13 +202,8 @@ class _HBPProtocol(asyncio.DatagramProtocol):
         elif self._state == 'CONFIG_SENT':
             # RPTACK: config accepted — send RPTO if options are configured
             if self._cfg.options:
-                # Variable-length by convention: the master reads the rest of
-                # the datagram as the string, so send exactly what we have and
-                # no padding (DMRGateway writes strlen(options) + 8). Padding
-                # to 300 appends NULs to the last talkgroup, which a master
-                # that parses the subscription must defend against -- HBlink4
-                # strips them, and without that its int() raises and the
-                # parser falls back to denying every talkgroup on both slots.
+                # Variable-length, unpadded: the server reads the rest of
+                # the datagram as the options string.
                 opts = self._cfg.options.encode()[:300]
                 self._send_raw(HBPF_RPTO + self._radio_id_b + opts)
                 self._state = 'OPTIONS_SENT'
