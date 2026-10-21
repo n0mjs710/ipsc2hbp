@@ -54,7 +54,8 @@ HBPF_DTYPE_MASK     = 0x0F   # bits 3–0
 # ---------------------------------------------------------------------------
 # DMRD packet layout constants
 # ---------------------------------------------------------------------------
-DMRD_LEN         = 55    # Total DMRD packet length (bytes) — HBlink4 format
+DMRD_LEN         = 55    # Total DMRD packet length (bytes) as sent: core + BER + RSSI
+DMRD_CORE_LEN    = 53    # Minimum accepted: BER and RSSI are absent below 55
 DMRD_MAGIC_OFF   = 0     # bytes 0–3: b'DMRD'
 DMRD_SEQ_OFF     = 4     # byte 4: sequence number (0–255, wraps)
 DMRD_SRC_OFF     = 5     # bytes 5–7: source radio ID (3 bytes, big-endian)

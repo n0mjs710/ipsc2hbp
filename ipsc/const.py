@@ -8,7 +8,7 @@ CALL_MON_RPT       = 0x62   # Ignore — Motorola "call monitor": per-slot state
 REPEATER_BLOCKED   = 0x63   # Ignore — signal interference / BSI blocking event (start/end)
 XCMP_XNL           = 0x70   # NEVER TOUCH — can damage repeaters
 GROUP_VOICE        = 0x80   # PROCESS — primary payload
-PVT_VOICE          = 0x81   # Ignore (log DEBUG)
+PVT_VOICE          = 0x81   # PROCESS — private (unit-to-unit) voice; same layout as GROUP_VOICE
 GROUP_DATA         = 0x83   # Ignore (log DEBUG)
 PVT_DATA           = 0x84   # Ignore (log DEBUG)
 RPT_WAKE_UP        = 0x85   # Ignore — repeater wake-up: seq(4)+slots(1)+type(1)
@@ -49,6 +49,7 @@ VOICE_HEAD  = 0x01   # Voice LC header — call start (TS from IPSC header byte 
 VOICE_TERM  = 0x02   # Terminator with LC — call end (TS from IPSC header byte 17)
 SLOT1_VOICE = 0x0A   # Voice burst on Timeslot 1
 SLOT2_VOICE = 0x8A   # Voice burst on Timeslot 2 (bit 7 set)
+SYNC_UNDETECT = 0x13 # Repeater lost this burst (no sync): 34-byte placeholder, TS in bit 7
 
 # ---------------------------------------------------------------------------
 # IPSC version field — 4 bytes sent in all registration and keepalive packets.
@@ -91,9 +92,26 @@ GV_CALL_INFO_OFF  = 17   # byte  17:    call info — TS_CALL_MSK and END_MSK
 GV_RTP_TS_OFF     = 22   # bytes 22–25: RTP timestamp (8 kHz, +480/burst) — the real per-call continuity anchor
 GV_BURST_TYPE_OFF = 30   # byte  30:    burst data type (payload type)
 GV_PAYLOAD_OFF    = 31   # bytes 31+:   burst payload (variable length by type)
-GV_BE_FLAG        = 0x16  # data[32] EMB/LC/sync-flags value identifying burst E (carries reassembled LC)
+# Voice burst control byte (data[32]); bit names after node-dmr-lib DMRVoicePayload.
+GV_CTRL_OFF       = 32
+GV_CTRL_LC_ERR    = 0x80  # embedded LC failed its check (burst E LC is corrupt)
+GV_CTRL_SYNC      = 0x40  # burst carries voice sync (burst A)
+GV_CTRL_EMB_LC    = 0x10  # reassembled embedded LC present (burst E)
+GV_CTRL_BAD1      = 0x01  # AMBE frame 1 uncorrectable on RF receive
+GV_AMBE_OFF       = 33    # 19-byte AMBE field: three 49-bit frames at bits 0, 50, 100
+GV_BAD2_BIT       = 49    # AMBE field bit: frame 2 uncorrectable
+GV_BAD3_BIT       = 99    # AMBE field bit: frame 3 uncorrectable
+# VOICE_HEAD / VOICE_TERM payload (after node-dmr-lib DMRDataPayload)
+GV_PDU_SLOT_MSK   = 0x80  # byte 31 bit 7: timeslot 2
+GV_RSSI_FLAG_OFF  = 34    # bit 7: RSSI present
+GV_RSSI_FLAG_MSK  = 0x80
+GV_SLOTTYPE_OFF   = 35    # bit 3: 2-byte slot type follows the data
+GV_SLOTTYPE_MSK   = 0x08
+GV_DATA_BITS_OFF  = 36    # 16-bit data length in bits
+GV_DATA_OFF       = 38    # data, then slot type, then 16-bit RSSI
 GV_BE_LC_FLCO_OFF = 56   # byte  56:    FLCO of the reassembled LC repeat carried only on burst E
 FLCO_GROUP        = 0x00  # FLCO for Group Voice Channel User (the real call identity); 0x04-0x08 = TA/GPS
+FLCO_PRIVATE      = 0x03  # FLCO for Unit-to-Unit Voice Channel User (private call)
 
 # Minimum GROUP_VOICE length we will accept (must reach byte 30 for burst_type):
 #   SLOT1/SLOT2_VOICE: 52 bytes (31-byte header + 2-byte pad + 19-byte AMBE)

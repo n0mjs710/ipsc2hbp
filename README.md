@@ -1,7 +1,7 @@
 ## PROJECT: IPSC to HomeBrew Protocol Translator ##
 **THIS IS THE DEVELOPMENT VERSION. PRODUCTION USE SHOULD USE THE C VERSION: IPSC2HBPC. IT IS FAR, FAR MORE EFFICIENT. ONCE CHANGES WORK HERE, THEY ARE PORTED TO C**
 
-**NOTICE:** This software only supports Group Voice traffic at this time. IPSC is not an open standard. Supporting it involves painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
+**NOTICE:** This software only supports Group and Private (unit-to-unit) Voice traffic at this time; confirmed private calls are not supported. IPSC is not an open standard. Supporting it involves painstaking reverse engineering of IPSC packets, and much is unknown. IPSC is owned by and heavily protected by Motorola Solutions, Inc. Please do not ask for features that require further deciphering of IPSC without providing verified correct, legally obtained information about the protocol necessary to support a feature.
 
 **PURPOSE:** A single, small Python 3 daemon that connects a Motorola MOTOTRBO IPSC system to one upstream DMR network server running the open HomeBrew Repeater Protocol (BrandMeister, DMR+, FreeDMR, HBlink4, etc.).
 
@@ -23,6 +23,7 @@ The previous solution to this problem was a pair of Python 2 applications: `IPSC
 - **Correct over clever.** Protocol behavior is derived from the DMRlink and HBlink source — not the published specs, which contain several errors. Where the spec disagrees with working code, the code wins.
 - **TRACKING mode by default.** The HBP connection follows the repeater: it comes up when the repeater registers and drops when the repeater goes away. PERSISTENT mode is available if you'd rather keep the upstream connection up regardless.
 - **Native call timing on the IPSC side.** Inbound HBP→IPSC voice is clocked out through a jitter buffer at the exact 60 ms DMR cadence — anchored to the first voice burst so every burst gets the full buffer lead — so the repeater sees a continuous grid identical to real MOTOTRBO equipment. The terminator is held until the buffered tail drains, so the call tail is never clipped. Depth is tunable per link via `[hbp] jitter_buffer_depth` (default 2 = 120 ms; raise it for marginal/high-latency RF backhaul).
+- **Carry what the repeater knows about the RF.** On the IPSC→HBP path, AMBE frames the repeater flags as uncorrectable are sent as MMDVMHost's silence frame (what an MMDVMHost repeater does with its own unrepairable frames), the repeater's RSSI from each `VOICE_HEAD` / `VOICE_TERM` goes out in DMRD byte 54 (0, HBP's "no reading", on voice bursts), the superframe position re-syncs on every burst A, and the repeater's "sync not detected" placeholders for lost bursts are logged and dropped. On the HBP→IPSC path, the RSSI in DMRD byte 54 of a voice header or terminator goes into the `VOICE_HEAD` / `VOICE_TERM` built from it, and 53-byte DMRD (no BER or RSSI bytes) is accepted.
 
 **WHAT IT IS NOT:**
 
@@ -52,7 +53,7 @@ python ipsc2hbp.py -c ipsc2hbp.toml
 
 **PROPERTY:**
 
-This work represents the author's interpretation of the Motorola MOTOTRBO IPSC protocol and the HomeBrew Repeater Protocol. IPSC protocol behavior is derived from reverse-engineering work originally done in DMRlink. HBP behavior is derived from HBlink, HBlink3, and HBlink4. Motorola and MOTOTRBO are registered trademarks of Motorola Solutions, Inc. This project is not affiliated with Motorola Solutions in any way.
+This work represents the author's interpretation of the Motorola MOTOTRBO IPSC protocol and the HomeBrew Repeater Protocol. IPSC protocol behavior is derived from reverse-engineering work originally done in DMRlink. HBP behavior is derived from HBlink, HBlink3, and HBlink4. Private (unit-to-unit) call support is based on a patch contributed by Marco Brunozzi IW0RED, who also located the RSSI field. The IPSC RSSI encoding and the voice-burst control and bad-voice flags follow `node-dmr-lib` by rick51231 (MIT). Motorola and MOTOTRBO are registered trademarks of Motorola Solutions, Inc. This project is not affiliated with Motorola Solutions in any way.
 
 ### No Support Is Provided
 

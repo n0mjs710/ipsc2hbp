@@ -438,25 +438,28 @@ Identical structure for both directions (peer→us and us→peer).
 | 0x02 | VOICE_TERM | both | Terminator with LC — call end |
 | 0x0A | SLOT1_VOICE | both | Voice burst, Timeslot 1 |
 | 0x8A | SLOT2_VOICE | both | Voice burst, Timeslot 2 (bit 7 set) |
+| 0x13 | SYNC_UNDETECT | repeater → us | Placeholder for a burst the repeater lost (no sync); 34 bytes, TS in bit 7; logged and dropped |
 
 ---
 
 ## GROUP_VOICE Payloads (byte 31 onward)
 
+PVT_VOICE (0x81) uses the same layout; its LC carries FLCO 0x03 (Unit-to-Unit Voice Channel User).
+
 ### VOICE_HEAD / VOICE_TERM — 54 bytes total (23-byte payload)
 
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
-| 31 | 1 | RSSI_THRESH_PARITY | 0x80 — confirmed from wire captures |
+| 31 | 1 | Slot / RSSI status | bit 7 = timeslot 2; bit 6 = RSSI status (set on strong signals, clear on weak in captures; left 0 on transmit) |
 | 32 | 2 | Length to Follow | 0x000A = 10 words — length of repeater burst data that follows, in 16-bit words (HEAD/TERM are data packets in IPSC); covers bytes 34–53 = 20 bytes |
-| 34 | 1 | RSSI Status | 0x80 — confirmed from wire captures |
+| 34 | 1 | RSSI Present | bit 7 = RSSI follows the slot type (0x80 in all captures) |
 | 35 | 1 | Slot Type | 0x0A — DMR slot type byte, FEC-decoded from the DMR frame header |
 | 36 | 2 | Data Size | 0x0060 = 96 bits |
 | 38 | 9 | LC Word | FLCO(1) + FID(1) + SVC_OPT(1) + dst_group(3) + src_sub(3) |
 | 47 | 3 | RS(12,9) FEC | parity bytes; differs between HEAD and TERM encoding |
-| 50 | 1 | Padding | 0x00 |
-| 51 | 1 | Type Indicator | 0x11 = VOICE_HEAD, 0x12 = VOICE_TERM |
-| 52 | 2 | Padding | 0x0000 |
+| 50 | 1 | Slot Type | 0x00 |
+| 51 | 1 | Slot Type | 0x11 = VOICE_HEAD, 0x12 = VOICE_TERM |
+| 52 | 2 | RSSI | 8.8 fixed-point -dBm (0x3c15 = -60.1 dBm); 0 = no reading. Sent from DMRD byte 54 on HBP→IPSC |
 
 ---
 
@@ -465,8 +468,8 @@ Identical structure for both directions (peer→us and us→peer).
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
 | 31 | 1 | Length to Follow | 0x14 = 20 bytes — length of EMB flags + FEC-decoded AMBE data (including bad-data bits per frame, always 0) that follows; covers bytes 32–51 |
-| 32 | 1 | EMB / LC / Sync Flags | 0x40 — encodes LC, sync, and EMB content indicators; constant for group voice VOICESYNC bursts; partially deciphered |
-| 33 | 19 | AMBE (frames a/b/c) | 152 bits: frame_a(49) + bad_data_a(1) + frame_b(49) + bad_data_b(1) + frame_c(49) + bad_data_c(1) + pad(2); bad data bits set to 0 on transmit (no decode-error information available from HBP side) |
+| 32 | 1 | Control | 0x40 on transmit. Bits: 0x80 embedded LC failed its check, 0x40 voice sync (burst A), 0x10 reassembled LC present (burst E), 0x01 AMBE frame 1 uncorrectable |
+| 33 | 19 | AMBE (frames a/b/c) | 152 bits: frame_a(49) + bad_b(1) + frame_b(49) + bad_c(1) + frame_c(49) + pad(3); frame a's bad flag is control bit 0x01. Bad flags are 0 on transmit (MMDVMHost has already corrected or silenced the frames) |
 
 ---
 
@@ -475,8 +478,8 @@ Identical structure for both directions (peer→us and us→peer).
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
 | 31 | 1 | Length to Follow | 0x19 = 25 bytes — EMB flags + AMBE + embedded LC fragment; covers bytes 32–56 |
-| 32 | 1 | EMB / LC / Sync Flags | 0x06 — constant for group voice B/C/D bursts; partially deciphered |
-| 33 | 19 | AMBE (frames a/b/c) | 152 bits: frame_a(49) + bad_data_a(1) + frame_b(49) + bad_data_b(1) + frame_c(49) + bad_data_c(1) + pad(2); bad data bits set to 0 on transmit |
+| 32 | 1 | Control | 0x06 on transmit (see burst A for the known bits) |
+| 33 | 19 | AMBE (frames a/b/c) | as burst A |
 | 52 | 4 | Embedded LC Fragment | LC fragment 1/2/3 (for B/C/D) from embedded LC encoding |
 | 56 | 1 | EMB Header | burst-specific EMB header byte, bit 0 cleared (& 0xFE) |
 
@@ -487,8 +490,8 @@ Identical structure for both directions (peer→us and us→peer).
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
 | 31 | 1 | Length to Follow | 0x22 = 34 bytes — EMB flags + AMBE + embedded LC fragment + LC repeat; covers bytes 32–65 |
-| 32 | 1 | EMB / LC / Sync Flags | 0x16 — constant for group voice burst E; partially deciphered |
-| 33 | 19 | AMBE (frames a/b/c) | 152 bits: frame_a(49) + bad_data_a(1) + frame_b(49) + bad_data_b(1) + frame_c(49) + bad_data_c(1) + pad(2); bad data bits set to 0 on transmit |
+| 32 | 1 | Control | 0x16 on transmit: 0x10 = reassembled LC present (see burst A for the known bits) |
+| 33 | 19 | AMBE (frames a/b/c) | as burst A |
 | 52 | 4 | Embedded LC Fragment 4 | LC fragment 4 from embedded LC encoding |
 | 56 | 3 | LC Prefix | FLCO(1) + FID(1) + SVC_OPT(1) |
 | 59 | 3 | Destination Group | TGID |
@@ -502,8 +505,8 @@ Identical structure for both directions (peer→us and us→peer).
 | Offset | Len | Field | Value / Notes |
 |--------|-----|-------|---------------|
 | 31 | 1 | Length to Follow | 0x19 = 25 bytes — EMB flags + AMBE + null embedded LC; covers bytes 32–56 |
-| 32 | 1 | EMB / LC / Sync Flags | 0x06 — constant for group voice burst F; partially deciphered |
-| 33 | 19 | AMBE (frames a/b/c) | 152 bits: frame_a(49) + bad_data_a(1) + frame_b(49) + bad_data_b(1) + frame_c(49) + bad_data_c(1) + pad(2); bad data bits set to 0 on transmit |
+| 32 | 1 | Control | 0x06 on transmit (see burst A for the known bits) |
+| 33 | 19 | AMBE (frames a/b/c) | as burst A |
 | 52 | 4 | Null Embedded LC | 0x00000000 |
 | 56 | 1 | EMB Header | 0x10 (BURST_F EMB header 0x11, bit 0 cleared) |
 

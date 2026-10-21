@@ -14,12 +14,12 @@ Inbound (HBP → IPSC): hbp_voice_received()
 
 AMBE layout in IPSC SLOT_VOICE (bytes 33–51, 19 bytes = 152 bits):
   bits[0:49]    = AMBE frame a (49 bits)
-  bit[49]       = bad data bit for frame a (1 = AMBE decode error; always 0 on transmit)
+  bit[49]       = bad voice flag for frame b (uncorrectable on RF receive; 0 on transmit)
   bits[50:99]   = AMBE frame b (49 bits)
-  bit[99]       = bad data bit for frame b (always 0 on transmit)
+  bit[99]       = bad voice flag for frame c (0 on transmit)
   bits[100:149] = AMBE frame c (49 bits)
-  bit[149]      = bad data bit for frame c (always 0 on transmit)
-  bits[150:152] = pad (0)
+  bits[149:152] = pad (0)
+  Frame a's bad voice flag is bit 0 of the control byte, data[32].
 
 DMR voice frame layout (264 bits = 33 bytes):
   frame_a[72] | frame_b_first[36] | EMBED[48] | frame_b_second[36] | frame_c[72]
@@ -49,20 +49,24 @@ from dmr_utils3.const import EMB, SLOT_TYPE, BS_VOICE_SYNC, BS_DATA_SYNC, LC_OPT
 from config import Config
 from translate.const import MAX_SYNTH_BURSTS
 from ipsc.const import (
-    GROUP_VOICE,
+    GROUP_VOICE, PVT_VOICE,
     VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE,
     TS_CALL_MSK, END_MSK,
     GV_CALL_SEQ_OFF, GV_CALL_INFO_OFF,
     GV_SRC_SUB_OFF, GV_DST_GROUP_OFF,
-    GV_BE_FLAG, GV_BE_LC_FLCO_OFF, FLCO_GROUP,
+    GV_CTRL_OFF, GV_CTRL_LC_ERR, GV_CTRL_SYNC, GV_CTRL_EMB_LC, GV_CTRL_BAD1,
+    GV_AMBE_OFF, GV_BAD2_BIT, GV_BAD3_BIT,
+    GV_PDU_SLOT_MSK, GV_RSSI_FLAG_OFF, GV_RSSI_FLAG_MSK, GV_SLOTTYPE_OFF, GV_SLOTTYPE_MSK,
+    GV_DATA_BITS_OFF, GV_DATA_OFF,
+    GV_BE_LC_FLCO_OFF, FLCO_GROUP, FLCO_PRIVATE,
 )
 from hbp.const import (
     HBPF_DMRD,
-    HBPF_TGID_TS2,
+    HBPF_TGID_TS2, HBPF_TGID_CALL_P,
     HBPF_FRAMETYPE_VOICE, HBPF_FRAMETYPE_VOICESYNC, HBPF_FRAMETYPE_DATASYNC,
     HBPF_FRAMETYPE_MASK, HBPF_DTYPE_MASK,
     HBPF_SLT_VHEAD, HBPF_SLT_VTERM,
-    DMRD_LEN,
+    DMRD_CORE_LEN, DMRD_RSSI_OFF,
     DMRD_SRC_OFF, DMRD_DST_OFF,
     DMRD_FLAGS_OFF, DMRD_PAYLOAD_OFF,
 )
@@ -74,6 +78,14 @@ _NULL_EMB_LC = bitarray(32, endian='big')
 _NULL_EMB_LC.setall(0)
 
 _EMB_BURST_NAMES = ('BURST_B', 'BURST_C', 'BURST_D', 'BURST_E', 'BURST_F')
+
+# LC options for a private (unit-to-unit) call: FLCO, FID, service options.
+_LC_OPT_PVT = bytes([FLCO_PRIVATE, 0x00, 0x00])
+
+# 72-bit AMBE silence frame from MMDVMHost DMR_SILENCE_DATA; replaces frames the
+# repeater flagged bad (IPSC→HBP).
+_AMBE_SILENCE_MMDVM = bitarray(endian='big')
+_AMBE_SILENCE_MMDVM.frombytes(bytes.fromhex('B9E881526173002A6B'))
 
 # IPSC→HBP call-boundary threshold. Current XPR8400 firmware churns the IPSC
 # call-seq (byte 5) every superframe when Talker Alias is interleaved, so we no
@@ -134,21 +146,43 @@ def _extract_ambe_from_dmrd(payload_33: bytes) -> bytes:
     return ipsc_bits.tobytes()
 
 
-def _build_ipsc_voice_payload(lc: bytes, burst_type: int) -> bytes:
+def _ipsc_rssi(data: bytes) -> int:
+    """RSSI carried in a VOICE_HEAD / VOICE_TERM, as the DMRD byte-54 value (-dBm
+    magnitude); 0 = no reading.  The raw value is 8.8 fixed-point -dBm
+    (node-dmr-lib, rick51231).  Voice bursts carry no RSSI."""
+    if len(data) < GV_DATA_OFF or not (data[GV_RSSI_FLAG_OFF] & GV_RSSI_FLAG_MSK):
+        return 0
+    bits = (data[GV_DATA_BITS_OFF] << 8) | data[GV_DATA_BITS_OFF + 1]
+    off = GV_DATA_OFF + (bits + 15) // 16 * 2 + (2 if data[GV_SLOTTYPE_OFF] & GV_SLOTTYPE_MSK else 0)
+    if off + 2 > len(data):
+        return 0
+    raw = (data[off] << 8) | data[off + 1]
+    if raw == 0:
+        return 0
+    return min((raw + 128) >> 8, 255)
+
+
+def _ipsc_rssi_raw(mag: int) -> int:
+    """Inverse of _ipsc_rssi(): DMRD byte-54 magnitude → 16-bit IPSC RSSI field; 0 = no reading."""
+    return mag << 8
+
+
+def _build_ipsc_voice_payload(lc: bytes, burst_type: int, ts: int, rssi_raw: int) -> bytes:
     """
     Build the MOTOTRBO-format payload bytes (after the burst_type byte) for
     VOICE_HEAD or VOICE_TERM.  Both produce 23-byte payloads → 54-byte total
     GROUP_VOICE packet (confirmed from voice_packets.txt and wire captures).
 
     Byte layout:
-      byte 0:    RSSI_THRESH_PARITY     (0x80, confirmed from wire captures)
+      byte 0:    bit 7 = timeslot 2
       bytes 1–2: length_to_follow       (10 words = (54-34)/2)
-      byte 3:    RSSI status            (0x80)
+      byte 3:    RSSI present           (0x80)
       byte 4:    slot type / sync       (0x0a)
       bytes 5–6: data size in bits      (0x0060 = 96)
       bytes 7–15: LC word (9 bytes)
       bytes 16–18: RS(12,9) FEC (3 bytes, mask differs HEAD vs TERM)
-      bytes 19–22: type indicator + zeros (0x00, 0x11 or 0x12, 0x00, 0x00)
+      bytes 19–20: slot type (0x00, 0x11 or 0x12)
+      bytes 21–22: RSSI, 8.8 fixed-point -dBm (0 = no reading)
     """
     if burst_type == VOICE_HEAD:
         fec      = bptc.rs129.lc_header_encode(lc[:9])
@@ -157,14 +191,15 @@ def _build_ipsc_voice_payload(lc: bytes, burst_type: int) -> bytes:
         fec      = bptc.rs129.lc_terminator_encode(lc[:9])
         type_tag = b'\x12'
     return (
-        b'\x80'                    # RSSI_THRESH_PARITY — 0x80 confirmed from wire captures
+        bytes([GV_PDU_SLOT_MSK if ts == 2 else 0x00])
         + struct.pack('>H', 10)    # length_to_follow = 10 words
-        + b'\x80'                  # RSSI status
+        + b'\x80'                  # RSSI present
         + b'\x0a'                  # slot type / sync
         + struct.pack('>H', 0x60)  # data size = 96 bits
         + lc[:9]                   # full LC word (FLCO + FID + opts + dst + src)
         + fec                      # RS(12,9) parity: 3 bytes
-        + b'\x00' + type_tag + b'\x00\x00'   # 4 bytes: 0x00, 0x11/0x12, 0x00, 0x00
+        + b'\x00' + type_tag      # slot type
+        + struct.pack('>H', rssi_raw)
     )
 
 
@@ -225,6 +260,7 @@ class CallTranslator:
         self._depth             = cfg.jitter_buffer_depth  # delivery delay in 60 ms slots
         self._in_buf            = {1: {},   2: {}}     # pos (0-5) → ambe_19 bytes; filled on receive
         self._in_term_pending   = {1: False, 2: False} # terminator received; emit after tail drains
+        self._in_term_rssi      = {1: 0,    2: 0}      # DMRD byte 54 of that terminator; 0 = no reading
         self._in_next_slot_time = {1: 0.0,  2: 0.0}   # monotonic abs time of next delivery; 0.0 = idle
         self._in_burst_pos      = {1: 0,    2: 0}      # superframe position of next delivery (0-5 = A-F)
         self._in_consec_synth   = {1: 0,    2: 0}      # consecutive synthesized (empty-slot) deliveries
@@ -261,6 +297,7 @@ class CallTranslator:
         self._in_last_pkt            = {1: 0.0,  2: 0.0}
         self._in_buf                 = {1: {},   2: {}}
         self._in_term_pending        = {1: False, 2: False}
+        self._in_term_rssi           = {1: 0,    2: 0}
         self._in_next_slot_time      = {1: 0.0,  2: 0.0}
         self._in_burst_pos           = {1: 0,    2: 0}
         self._in_consec_synth        = {1: 0,    2: 0}
@@ -359,6 +396,12 @@ class CallTranslator:
         src_sub   = data[GV_SRC_SUB_OFF   : GV_SRC_SUB_OFF   + 3]
         dst_group = data[GV_DST_GROUP_OFF  : GV_DST_GROUP_OFF + 3]
         flags     = HBPF_TGID_TS2 if ts == 2 else 0x00
+        is_pvt    = data[0] == PVT_VOICE
+        if is_pvt:
+            flags |= HBPF_TGID_CALL_P
+        lc_opt    = _LC_OPT_PVT if is_pvt else LC_OPT
+        dst_kind  = 'unit' if is_pvt else 'tg'
+        rssi      = 0
 
         # Learn call metadata so we echo the same values back inbound
         if len(data) >= 17:
@@ -383,8 +426,8 @@ class CallTranslator:
             if self._out_stream_id[ts] is None:
                 self._out_stream_id[ts]      = os.urandom(4)
                 self._out_ipsc_stream_id[ts] = ipsc_stream_id
-                log.info('IPSC call start: src=%d  tg=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
-                         int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                log.info('IPSC call start: src=%d  %s=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
+                         int.from_bytes(src_sub, 'big'), dst_kind, int.from_bytes(dst_group, 'big'),
                          ts, self._out_stream_id[ts].hex(), ipsc_stream_id)
             else:
                 # Motorola radios fire VOICE_HEAD twice at call start — once on LC
@@ -394,7 +437,7 @@ class CallTranslator:
                 log.debug('Duplicate VOICE_HEAD ts=%d — keeping stream=%s',
                           ts, self._out_stream_id[ts].hex())
             self._out_frame_pos[ts] = 0
-            lc = LC_OPT + dst_group + src_sub
+            lc = lc_opt + dst_group + src_sub
             self._out_lc[ts]     = lc
             self._out_emb_lc[ts] = bptc.encode_emblc(lc)
             full_lc = bptc.encode_header_lc(lc)
@@ -407,11 +450,12 @@ class CallTranslator:
             )
             payload_33 = frame_bits.tobytes()
             flags |= HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VHEAD
+            rssi = _ipsc_rssi(data)
 
         elif burst_type == VOICE_TERM:
             if self._out_stream_id[ts] is None:
                 return
-            lc = self._out_lc[ts] if self._out_lc[ts] else LC_OPT + dst_group + src_sub
+            lc = self._out_lc[ts] if self._out_lc[ts] else lc_opt + dst_group + src_sub
             full_lc = bptc.encode_terminator_lc(lc)
             frame_bits = (
                 full_lc[0:98]
@@ -422,6 +466,7 @@ class CallTranslator:
             )
             payload_33 = frame_bits.tobytes()
             flags |= HBPF_FRAMETYPE_DATASYNC | HBPF_SLT_VTERM
+            rssi = _ipsc_rssi(data)
 
         else:  # SLOT1_VOICE or SLOT2_VOICE
             # Boundary detection. The IPSC call-seq (byte 5) is deliberately NOT
@@ -438,25 +483,30 @@ class CallTranslator:
                 self._reset_out_call(ts)
 
             if self._out_stream_id[ts] is None:
-                # Late entry. Anchor identity ONLY to a GVCU burst E: a burst E
-                # carrying Talker Alias / GPS (FLCO != GROUP at byte 56) puts alias
-                # bytes in the header src/dst, so we must not adopt them as the call
-                # identity. Wait for the next GVCU superframe (≤ ~1 superframe).
-                if data[32] != GV_BE_FLAG or len(data) <= GV_BE_LC_FLCO_OFF:
+                # Late entry. Anchor identity ONLY to a burst E carrying the voice LC
+                # (GVCU for group, UU_V_Ch_Usr for private): a burst E carrying Talker
+                # Alias / GPS puts alias bytes in the header src/dst, so we must not
+                # adopt them as the call identity. Wait for the next voice-LC
+                # superframe (≤ ~1 superframe).
+                ctrl = data[GV_CTRL_OFF]
+                if len(data) <= GV_BE_LC_FLCO_OFF or not (ctrl & GV_CTRL_EMB_LC):
                     return
-                if data[GV_BE_LC_FLCO_OFF] != FLCO_GROUP:
-                    log.debug('IPSC late entry deferred ts=%d — burst E embedded LC is non-GVCU '
-                              '(flco=0x%02x, Talker Alias/GPS); waiting for GVCU superframe',
+                if ctrl & GV_CTRL_LC_ERR:
+                    log.debug('IPSC late entry deferred ts=%d — burst E embedded LC failed its check', ts)
+                    return
+                if data[GV_BE_LC_FLCO_OFF] != (FLCO_PRIVATE if is_pvt else FLCO_GROUP):
+                    log.debug('IPSC late entry deferred ts=%d — burst E embedded LC is not the voice LC '
+                              '(flco=0x%02x, Talker Alias/GPS); waiting for voice-LC superframe',
                               ts, data[GV_BE_LC_FLCO_OFF])
                     return
-                lc = LC_OPT + dst_group + src_sub
+                lc = lc_opt + dst_group + src_sub
                 self._out_stream_id[ts]      = os.urandom(4)
                 self._out_ipsc_stream_id[ts] = ipsc_stream_id
                 self._out_lc[ts]             = lc
                 self._out_emb_lc[ts]         = bptc.encode_emblc(lc)
                 self._out_frame_pos[ts]      = 4  # Burst E is superframe position 4
-                log.info('IPSC late entry: ts=%d src=%d tg=%d — LC from GVCU Burst E, stream=%s  int_seq_id=0x%02x',
-                         ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                log.info('IPSC late entry: ts=%d src=%d %s=%d — LC from Burst E, stream=%s  int_seq_id=0x%02x',
+                         ts, int.from_bytes(src_sub, 'big'), dst_kind, int.from_bytes(dst_group, 'big'),
                          self._out_stream_id[ts].hex(), ipsc_stream_id)
             # Continuation: the per-frame header src/dst and call-seq are ignored
             # (they may be alias bytes on a TA superframe). All AMBE is forwarded
@@ -465,12 +515,20 @@ class CallTranslator:
                 log.warning('SLOT_VOICE too short for AMBE: %d bytes', len(data))
                 return
 
-            # Extract 3×49-bit AMBE from IPSC bytes 33–51
+            # Extract 3×49-bit AMBE from IPSC bytes 33–51.  A frame the repeater
+            # flagged uncorrectable on RF receive is sent as MMDVMHost's silence frame.
             raw_ba = bitarray(endian='big')
-            raw_ba.frombytes(data[33:52])
-            a1_72 = _ambe49_to_72(raw_ba[0:49])
-            a2_72 = _ambe49_to_72(raw_ba[50:99])
-            a3_72 = _ambe49_to_72(raw_ba[100:149])
+            raw_ba.frombytes(data[GV_AMBE_OFF:GV_AMBE_OFF + 19])
+            bad = (data[GV_CTRL_OFF] & GV_CTRL_BAD1, raw_ba[GV_BAD2_BIT], raw_ba[GV_BAD3_BIT])
+            a1_72, a2_72, a3_72 = (
+                _AMBE_SILENCE_MMDVM if bad[i] else _ambe49_to_72(raw_ba[50 * i : 50 * i + 49])
+                for i in range(3)
+            )
+            if any(bad):
+                log.debug('IPSC bad AMBE ts=%d flags=%d%d%d — sent as silence',
+                          ts, bool(bad[0]), bad[1], bad[2])
+            if data[GV_CTRL_OFF] & GV_CTRL_SYNC:
+                self._out_frame_pos[ts] = 0   # burst A: re-sync superframe
 
             pos   = self._out_frame_pos[ts] % 6
             embed = self._build_embed(pos, self._out_emb_lc[ts])
@@ -481,7 +539,7 @@ class CallTranslator:
 
         # Forward under the LOCKED call identity (from _out_lc), never the per-frame
         # header — on a Talker Alias superframe the header src/dst are alias bytes.
-        locked_lc = self._out_lc[ts] if self._out_lc[ts] else (LC_OPT + dst_group + src_sub)
+        locked_lc = self._out_lc[ts] if self._out_lc[ts] else (lc_opt + dst_group + src_sub)
         out_dst   = locked_lc[3:6]
         out_src   = locked_lc[6:9]
         dmrd = (
@@ -493,14 +551,15 @@ class CallTranslator:
             + bytes([flags])
             + self._out_stream_id[ts]
             + payload_33
-            + b'\x00\x00'   # BER + RSSI (synthesised, no RF measurement)
+            + b'\x00'        # BER: not reported by IPSC
+            + bytes([rssi])  # RSSI: head/term only, 0 = no reading
         )
         self._out_seq = (self._out_seq + 1) & 0xFF
         self._hbp.send_dmrd(dmrd)
 
         if burst_type == VOICE_TERM:
-            log.info('IPSC call end:   src=%d  tg=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
-                     int.from_bytes(out_src, 'big'), int.from_bytes(out_dst, 'big'), ts,
+            log.info('IPSC call end:   src=%d  %s=%d  ts=%d  stream=%s  int_seq_id=0x%02x',
+                     int.from_bytes(out_src, 'big'), dst_kind, int.from_bytes(out_dst, 'big'), ts,
                      self._out_stream_id[ts].hex(), self._out_ipsc_stream_id[ts])
             self._reset_out_call(ts)
 
@@ -564,7 +623,7 @@ class CallTranslator:
 
     def _emit_in(self, ts: int, lc: bytes, call_info: int, rtp_pt: int,
                  gv_payload: bytes, advance_ts: bool):
-        """Build and send one inbound GROUP_VOICE frame; advance RTP counters."""
+        """Build and send one inbound GROUP_VOICE / PVT_VOICE frame; advance RTP counters."""
         if advance_ts:
             self._in_rtp_ts[ts] = (self._in_rtp_ts[ts] + 480) & 0xFFFFFFFF
         rtp_seq_b = struct.pack('>H', self._in_rtp_seq[ts] & 0xFFFF)
@@ -572,7 +631,8 @@ class CallTranslator:
         self._in_rtp_seq[ts] += 1
         rtp_hdr = b'\x80' + bytes([rtp_pt]) + rtp_seq_b + rtp_ts_b + b'\x00\x00\x00\x00'
         self._ipsc.send_voice(
-            self._build_gv(lc[6:9], lc[3:6], call_info, rtp_hdr, gv_payload, self._in_stream_id[ts])
+            self._build_gv(lc[6:9], lc[3:6], call_info, rtp_hdr, gv_payload, self._in_stream_id[ts],
+                           pvt=(lc[0] & 0x3F) == FLCO_PRIVATE)   # opcode follows the LC's FLCO
         )
 
     def _deliver_slot(self, ts: int):
@@ -613,10 +673,12 @@ class CallTranslator:
         """Emit the VOICE_TERM for the active inbound call and clear its state."""
         lc        = self._in_lc[ts]
         call_info = (TS_CALL_MSK if ts == 2 else 0x00) | END_MSK
-        gv_payload = bytes([VOICE_TERM]) + _build_ipsc_voice_payload(lc, VOICE_TERM)
+        gv_payload = bytes([VOICE_TERM]) + _build_ipsc_voice_payload(
+            lc, VOICE_TERM, ts, _ipsc_rssi_raw(self._in_term_rssi[ts]))
         self._emit_in(ts, lc, call_info, 0x5e, gv_payload, advance_ts=False)
-        log.info('HBP call end:   src=%d  tg=%d  ts=%d  ipsc_id=0x%02x',
-                 int.from_bytes(lc[6:9], 'big'), int.from_bytes(lc[3:6], 'big'),
+        log.info('HBP call end:   src=%d  %s=%d  ts=%d  ipsc_id=0x%02x',
+                 int.from_bytes(lc[6:9], 'big'),
+                 'unit' if (lc[0] & 0x3F) == FLCO_PRIVATE else 'tg', int.from_bytes(lc[3:6], 'big'),
                  ts, self._in_stream_id[ts])
         self._clear_in_call(ts)
 
@@ -625,6 +687,7 @@ class CallTranslator:
         self._cancel_delivery_timer(ts)
         self._in_buf[ts].clear()
         self._in_term_pending[ts]   = False
+        self._in_term_rssi[ts]      = 0
         self._in_next_slot_time[ts] = 0.0
         self._in_burst_pos[ts]      = 0
         self._in_consec_synth[ts]   = 0
@@ -663,8 +726,9 @@ class CallTranslator:
         """Inbound HBP → IPSC."""
         if not self._ipsc.has_peers():
             return
-        if len(dmrd) < DMRD_LEN:
+        if len(dmrd) < DMRD_CORE_LEN:
             return
+        rssi = dmrd[DMRD_RSSI_OFF] if len(dmrd) > DMRD_RSSI_OFF else 0
 
         src_sub     = dmrd[DMRD_SRC_OFF  : DMRD_SRC_OFF  + 3]
         dst_group   = dmrd[DMRD_DST_OFF  : DMRD_DST_OFF  + 3]
@@ -673,6 +737,7 @@ class CallTranslator:
         payload_33  = dmrd[DMRD_PAYLOAD_OFF : DMRD_PAYLOAD_OFF + 33]
 
         ts         = 2 if (flags & HBPF_TGID_TS2) else 1
+        lc_opt     = _LC_OPT_PVT if (flags & HBPF_TGID_CALL_P) else LC_OPT
         prev_pkt   = self._in_last_pkt[ts]
         self._in_last_pkt[ts] = time()
         frame_type = flags & HBPF_FRAMETYPE_MASK
@@ -712,8 +777,10 @@ class CallTranslator:
                 self._in_hbp_stream_id[ts] = hbp_stream
                 self._in_stream_ctr        = (self._in_stream_ctr + 1) & 0xFF
                 self._in_stream_id[ts]     = self._in_stream_ctr
-                log.info('HBP call start: src=%d  tg=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
-                         int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'), ts,
+                log.info('HBP call start: src=%d  %s=%d  ts=%d  stream=%s  ipsc_id=0x%02x',
+                         int.from_bytes(src_sub, 'big'),
+                         'unit' if (lc[0] & 0x3F) == FLCO_PRIVATE else 'tg',
+                         int.from_bytes(dst_group, 'big'), ts,
                          hbp_stream.hex(), self._in_stream_id[ts])
             else:
                 # Duplicate VOICE_HEAD — Motorola radios send 2-3 for loss
@@ -725,7 +792,8 @@ class CallTranslator:
             # Forward the header immediately — it preserves the source's header
             # spacing exactly and keeps the header out of the voice delivery clock.
             call_info  = TS_CALL_MSK if ts == 2 else 0x00
-            gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(lc, VOICE_HEAD)
+            gv_payload = bytes([VOICE_HEAD]) + _build_ipsc_voice_payload(
+                lc, VOICE_HEAD, ts, _ipsc_rssi_raw(rssi))
             self._emit_in(ts, lc, call_info, 0xdd, gv_payload, advance_ts=False)
             return
 
@@ -733,12 +801,13 @@ class CallTranslator:
             if self._in_lc[ts] is None:
                 # Terminator with no active call (we missed the head) — build a
                 # fallback LC so we can still relay a clean call end.
-                self._in_lc[ts]     = LC_OPT + dst_group + src_sub
+                self._in_lc[ts]     = lc_opt + dst_group + src_sub
                 self._in_emb_lc[ts] = bptc.encode_emblc(self._in_lc[ts])
                 if self._in_hbp_stream_id[ts] is None:
                     self._in_hbp_stream_id[ts] = hbp_stream
             # Mark the terminator pending so the call tail isn't clipped.
             self._in_term_pending[ts] = True
+            self._in_term_rssi[ts]    = rssi
             if self._clock_idle(ts):
                 # No buffered voice tail to drain — emit the terminator now.
                 self._emit_term(ts)
@@ -761,7 +830,7 @@ class CallTranslator:
             if self._in_lc[ts] is None:
                 # Late entry: src_sub and dst_group are in every DMRD header so we
                 # can reconstruct a valid LC word immediately from any voice burst.
-                lc = LC_OPT + dst_group + src_sub
+                lc = lc_opt + dst_group + src_sub
                 self._in_lc[ts]            = lc
                 self._in_emb_lc[ts]        = bptc.encode_emblc(lc)
                 self._in_hbp_stream_id[ts] = hbp_stream
@@ -769,8 +838,9 @@ class CallTranslator:
                 self._in_stream_id[ts]     = self._in_stream_ctr
                 self._in_rtp_seq[ts]       = 0
                 self._in_rtp_ts[ts]        = 0
-                log.info('HBP late entry: ts=%d src=%d tg=%d — LC from stream, hbp_stream=%s',
-                         ts, int.from_bytes(src_sub, 'big'), int.from_bytes(dst_group, 'big'),
+                log.info('HBP late entry: ts=%d src=%d %s=%d — LC from stream, hbp_stream=%s',
+                         ts, int.from_bytes(src_sub, 'big'),
+                         'unit' if (flags & HBPF_TGID_CALL_P) else 'tg', int.from_bytes(dst_group, 'big'),
                          hbp_stream.hex())
             # Determine burst position and buffer the AMBE payload
             if frame_type == HBPF_FRAMETYPE_VOICESYNC:
@@ -789,10 +859,11 @@ class CallTranslator:
             self._arm_clock_from_voice(ts, cur_pos)
             return
 
-    def _build_gv(self, src_sub, dst_group, call_info, rtp_hdr, gv_payload, stream_id: int) -> bytes:
-        """Assemble a complete GROUP_VOICE packet."""
+    def _build_gv(self, src_sub, dst_group, call_info, rtp_hdr, gv_payload, stream_id: int,
+                  pvt: bool = False) -> bytes:
+        """Assemble a complete GROUP_VOICE / PVT_VOICE packet."""
         return (
-            bytes([GROUP_VOICE])
+            bytes([PVT_VOICE if pvt else GROUP_VOICE])
             + self._master_id_b
             + bytes([stream_id])   # call stream ID — constant for the entire call
             + src_sub

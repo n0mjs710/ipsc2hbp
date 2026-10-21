@@ -33,7 +33,7 @@ from ipsc.const import (
     GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
     REPEATER_BLOCKED, CALL_INTERRUPT_REQ, XCMP_XNL,
     SYSTEM_MAP_REQ, SYSTEM_MAP_REPLY,
-    VOICE_HEAD, VOICE_TERM,
+    VOICE_HEAD, VOICE_TERM, SYNC_UNDETECT,
     TS_CALL_MSK,
     GV_CALL_INFO_OFF, GV_BURST_TYPE_OFF,
     GV_MIN_LEN, AUTH_DIGEST_LEN,
@@ -159,10 +159,8 @@ class IPSCMasterProtocol(asyncio.DatagramProtocol):
             self._on_peer_list_req(data, host, port)
         elif opcode == DE_REG_REQ:
             self._on_de_reg_req(data, host, port)
-        elif opcode == GROUP_VOICE:
-            self._on_group_voice(data, host, port)
-        elif opcode == PVT_VOICE:
-            log.debug('PVT_VOICE from %s:%d — ignored', host, port)
+        elif opcode in (GROUP_VOICE, PVT_VOICE):
+            self._on_voice(data, host, port)
         elif opcode in (GROUP_DATA, PVT_DATA):
             log.debug('Data packet 0x%02x from %s:%d — ignored', opcode, host, port)
         elif opcode == REPEATER_BLOCKED:
@@ -300,23 +298,24 @@ class IPSCMasterProtocol(asyncio.DatagramProtocol):
         self._send(self._dereg_reply, host, port)
         self._remove_peer(peer_id)
 
-    def _on_group_voice(self, data: bytes, host: str, port: int):
+    def _on_voice(self, data: bytes, host: str, port: int):
         if not self._peers:
             return
 
         peer_id = data[1:5] if len(data) >= 5 else None
         if peer_id not in self._peers:
-            log.debug('GROUP_VOICE from unregistered peer at %s:%d — dropped', host, port)
+            log.debug('voice 0x%02x from unregistered peer at %s:%d — dropped', data[0], host, port)
             return
 
         if len(data) < GV_MIN_LEN:
-            log.warning('GROUP_VOICE too short (%d bytes) from %s:%d', len(data), host, port)
+            log.warning('voice 0x%02x too short (%d bytes) from %s:%d', data[0], len(data), host, port)
             return
 
         burst_type = data[GV_BURST_TYPE_OFF]   # byte 30 — always present
         call_info  = data[GV_CALL_INFO_OFF]    # byte 17
 
-        log.debug('GROUP_VOICE len=%d burst=0x%02x raw[0:32]=%s from %s:%d',
+        log.debug('%s len=%d burst=0x%02x raw[0:32]=%s from %s:%d',
+                  'PVT_VOICE' if data[0] == PVT_VOICE else 'GROUP_VOICE',
                   len(data), burst_type, data[:32].hex(), host, port)
 
         # Timeslot: for VOICE_HEAD/VOICE_TERM read from call_info byte 17;
@@ -325,6 +324,10 @@ class IPSCMasterProtocol(asyncio.DatagramProtocol):
             ts = 2 if (call_info & TS_CALL_MSK) else 1
         else:
             ts = 2 if (burst_type & 0x80) else 1
+
+        if (burst_type & 0x7F) == SYNC_UNDETECT:
+            log.info('IPSC sync not detected ts=%d — repeater lost a burst, not forwarded', ts)
+            return
 
         self._translator.ipsc_voice_received(data, ts, burst_type)
 
@@ -397,7 +400,7 @@ class IPSCMasterProtocol(asyncio.DatagramProtocol):
         """No-op in master mode; peers de-register themselves or time out."""
 
     def send_voice(self, packet: bytes):
-        """Send a pre-built GROUP_VOICE packet to all registered IPSC peers."""
+        """Send a pre-built GROUP_VOICE / PVT_VOICE packet to all registered IPSC peers."""
         for p in self._peers.values():
             self._send(packet, p['ip'], p['port'])
 
@@ -414,7 +417,6 @@ _PEER_KNOWN_UNHANDLED = {
     0x61: 'CALL_MON_STATUS',
     0x62: 'CALL_MON_RPT',
     0x63: 'REPEATER_BLOCKED',
-    0x81: 'PVT_VOICE',
     0x83: 'GROUP_DATA',
     0x84: 'PVT_DATA',
     0x85: 'RPT_WAKE_UP',
@@ -535,8 +537,8 @@ class IPSCPeerProtocol(asyncio.DatagramProtocol):
             return
 
         # User traffic — accepted from the master OR any peer.
-        if opcode == GROUP_VOICE:
-            self._on_group_voice(data, host, port)
+        if opcode in (GROUP_VOICE, PVT_VOICE):
+            self._on_voice(data, host, port)
             return
         if opcode in (GROUP_DATA, PVT_DATA):
             log.debug('Data packet 0x%02x from %s:%d — ignored', opcode, host, port)
@@ -683,12 +685,12 @@ class IPSCPeerProtocol(asyncio.DatagramProtocol):
         self._missed = 0
         log.debug('MASTER_ALIVE_REPLY from master %s:%d', host, port)
 
-    def _on_group_voice(self, data: bytes, host: str, port: int):
+    def _on_voice(self, data: bytes, host: str, port: int):
         if not self._connected:
             return
         if len(data) < GV_MIN_LEN:
-            log.warning('GROUP_VOICE too short (%d bytes) from %s:%d',
-                        len(data), host, port)
+            log.warning('voice 0x%02x too short (%d bytes) from %s:%d',
+                        data[0], len(data), host, port)
             return
 
         burst_type = data[GV_BURST_TYPE_OFF]
@@ -722,8 +724,13 @@ class IPSCPeerProtocol(asyncio.DatagramProtocol):
         # lock across VOICE_TERM so the guard above can swallow the tail.
         self._voice_src[ts] = {'src': src, 't': now}
 
-        log.debug('GROUP_VOICE len=%d burst=0x%02x raw[0:32]=%s from %s:%d',
+        log.debug('%s len=%d burst=0x%02x raw[0:32]=%s from %s:%d',
+                  'PVT_VOICE' if data[0] == PVT_VOICE else 'GROUP_VOICE',
                   len(data), burst_type, data[:32].hex(), host, port)
+
+        if (burst_type & 0x7F) == SYNC_UNDETECT:
+            log.info('IPSC sync not detected ts=%d — repeater lost a burst, not forwarded', ts)
+            return
 
         self._translator.ipsc_voice_received(data, ts, burst_type)
 
@@ -830,7 +837,7 @@ class IPSCPeerProtocol(asyncio.DatagramProtocol):
         self._connected = False
 
     def send_voice(self, packet: bytes):
-        """Fan a pre-built GROUP_VOICE packet out to the whole IPSC mesh — the
+        """Fan a pre-built GROUP_VOICE / PVT_VOICE packet out to the whole IPSC mesh — the
         master plus every connected peer (unicast emulation of multicast)."""
         if not self._connected:
             return

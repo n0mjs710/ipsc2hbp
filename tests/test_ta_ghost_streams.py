@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import load as load_config
 from ipsc.const import (
     GROUP_VOICE, VOICE_HEAD, VOICE_TERM, SLOT1_VOICE,
-    GV_BE_FLAG, GV_BE_LC_FLCO_OFF,
+    GV_CTRL_EMB_LC, GV_BE_LC_FLCO_OFF,
 )
 from translate.translator import CallTranslator
 
@@ -96,7 +96,7 @@ def _gv_burst_e(callseq, rtp_ts, hdr_src, hdr_dst, flco, lc_src, lc_dst):
     """66-byte burst-E SLOT_VOICE frame carrying a reassembled LC repeat."""
     b = _hdr(SLOT1_VOICE, callseq, rtp_ts, hdr_src, hdr_dst)
     b += bytes([0x22])                 # length to follow (byte 31)
-    b += bytes([GV_BE_FLAG])           # byte 32 = 0x16 (burst E)
+    b += bytes([0x06 | GV_CTRL_EMB_LC])  # byte 32 = 0x16 (burst E: embedded LC present)
     b += _AMBE19                       # bytes 33-51
     b += b'\x00\x00\x00\x00'           # bytes 52-55 embedded LC fragment 4
     b += bytes([flco, 0x00, 0x00])     # bytes 56-58 FLCO + FID + SVC_OPT

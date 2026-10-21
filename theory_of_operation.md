@@ -160,7 +160,7 @@ All IPSC opcodes:
 | `0x63` | REPEATER_BLOCKED | DEBUG logged — signal interference/BSI event, not handled |
 | `0x70` | XCMP_XNL | **NEVER process** — DEBUG logged only; these packets can damage repeater RF configuration |
 | `0x80` | GROUP_VOICE | Processed — primary payload |
-| `0x81` | PVT_VOICE | DEBUG logged — ignored |
+| `0x81` | PVT_VOICE | Processed — private (unit-to-unit) voice, same layout as GROUP_VOICE |
 | `0x83` | GROUP_DATA | DEBUG logged — ignored |
 | `0x84` | PVT_DATA | DEBUG logged — ignored |
 | `0x85` | RPT_WAKE_UP | DEBUG logged — received, not handled |
@@ -307,8 +307,12 @@ This section describes the physical structure of voice data in real MOTOTRBO IPS
 ### 5.1 SLOT_VOICE Payload (bytes 31–51, 21 bytes)
 
 ```
-Byte 31:       RTP payload length indicator (informational)
-Byte 32:       Reserved
+Byte 31:       Length to follow
+Byte 32:       Control byte (bit names after node-dmr-lib):
+                 0x80  embedded LC failed its check (burst E LC is corrupt)
+                 0x40  voice sync (burst A)
+                 0x10  reassembled embedded LC present (burst E)
+                 0x01  AMBE frame 1 uncorrectable on RF receive
 Bytes 33–51:   19 bytes of packed AMBE codewords (three 49-bit raw AMBE frames)
 ```
 
@@ -316,29 +320,39 @@ The 19-byte AMBE block (152 bits) is laid out as:
 
 ```
 bits   0– 48:  AMBE frame 1 (49 bits of raw AMBE)
-bit    49:     separator (always 0)
+bit    49:     AMBE frame 2 uncorrectable on RF receive (0 on transmit)
 bits  50– 98:  AMBE frame 2 (49 bits of raw AMBE)
-bit    99:     separator (always 0)
+bit    99:     AMBE frame 3 uncorrectable on RF receive (0 on transmit)
 bits 100–148:  AMBE frame 3 (49 bits of raw AMBE)
 bits 149–151:  trailing pad (3 bits, zero)
 ```
+
+On IPSC→HBP, a frame flagged uncorrectable is sent as MMDVMHost's silence frame, burst A
+(control 0x40) resets the superframe position, and late entry anchors only on a burst E whose
+LC is present, passed its check, and is the voice LC (group or private).  A burst type of
+0x13 (TS in bit 7) is the repeater's placeholder for a burst it lost; it is logged and dropped.
 
 This is the raw 49-bit AMBE+ECC codeword format used by the AMBE-3000 vocoder chip.
 
 ### 5.2 VOICE_TERM Payload (bytes 31–53, 23 bytes)
 
 ```
-Byte 31:       RSSI threshold/parity
+Byte 31:       bit 7 = timeslot 2; bit 6 = RSSI status (left 0 on transmit)
 Bytes 32–33:   length_to_follow (big-endian word count; 10 words → 20 bytes follow)
-Byte 34:       RSSI status
-Byte 35:       slot type / sync indicator
+Byte 34:       bit 7 = RSSI present
+Byte 35:       bit 3 = slot type present; low bits = sync
 Bytes 36–37:   data size (9 bytes of LC follow)
 Bytes 38–40:   LC options (3 bytes: FLCO, FID, service options)
 Bytes 41–43:   Destination group ID (3 bytes, big-endian)
 Bytes 44–46:   Source subscriber ID (3 bytes, big-endian)
 Bytes 47–49:   RS(12,9) parity — 3-byte FEC for the LC word
-Bytes 50–53:   Type indicator: 0x00, 0x11 (HEAD) or 0x12 (TERM), 0x00, 0x00
+Bytes 50–51:   Slot type: 0x00, 0x11 (HEAD) or 0x12 (TERM)
+Bytes 52–53:   RSSI, 8.8 fixed-point -dBm (0 = no reading)
 ```
+
+RSSI is carried in both directions: the repeater's reading goes out in DMRD byte 54 of the
+DMRD built from the HEAD/TERM, and DMRD byte 54 of an HBP voice header or terminator goes into
+the HEAD/TERM built from it.
 
 ### 5.3 VOICE_HEAD Payload (bytes 31–53, 23 bytes)
 
@@ -434,7 +448,7 @@ On any disconnect (watchdog, MSTNAK, MSTCL, socket error), the connection manage
 
 ### 6.6 DMRD Packet Layout
 
-All voice frames between ipsc2hbp and the HBP master use `DMRD` packets (55 bytes — HBlink4 format):
+All voice frames between ipsc2hbp and the HBP master use `DMRD` packets. ipsc2hbp sends 55 bytes and accepts 53 or more; a 53-byte DMRD has no BER or RSSI byte:
 
 ```
 Bytes  0– 3:  b'DMRD'
@@ -453,8 +467,8 @@ Byte     15:  Flags:
                               Data type (for DATASYNC frames: 0x01=VHEAD, 0x02=VTERM)
 Bytes 16–19:  Stream ID (4 random bytes, constant across a call, new per VOICE_HEAD)
 Bytes 20–52:  33-byte DMR frame payload (264 bits)
-Byte     53:  BER — bit error rate (0x00 for synthesised frames with no RF measurement)
-Byte     54:  RSSI (0x00 for synthesised frames)
+Byte     53:  BER — bit error rate (0x00: IPSC does not report it)
+Byte     54:  RSSI, -dBm magnitude (0x00 = no reading)
 ```
 
 Note: The published HBP spec incorrectly places the timeslot bit at bit 6 and call type at bit 5. The implementation in HBlink (all versions) uses bit 7 for timeslot, which is the authoritative source.
@@ -724,7 +738,7 @@ DEBUG mode is noisy — every SLOT_VOICE burst logs a hex dump of the first 32 b
 |---|---|
 | Timeslot translation or rewriting | This is a translator, not a router |
 | TGID translation or rewriting | Same |
-| Private voice calls | Group voice only |
+| Confirmed private calls | Unconfirmed private calls only |
 | Data calls (GROUP_DATA, PVT_DATA) | Dropped silently |
 | XNL / XCMP processing | ignored |
 | More than 14 simultaneous IPSC peers | IPSC protocol maximum is 15 including the master (master mode only; peer mode connects to one master) |
