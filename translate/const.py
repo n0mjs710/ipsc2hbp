@@ -20,7 +20,12 @@ JITTER_BUFFER_DEPTH = 2     # slots (× 60 ms = 120 ms initial delay)
 #
 # Empirical testing suggests MOTOTRBO repeaters struggle with the loss of
 # more than one burst frame and appear to expect filler frames at the 60 ms
-# cadence; the OTA behavior of the repeater itself uses a ~360 ms (6-burst)
-# wall-clock timer before resyncing — we mirror that threshold here, though
-# whether the IP receive path requires the same value is not confirmed.
-MAX_SYNTH_BURSTS = 6        # consecutive synthesized bursts → ~360 ms
+# cadence, which the clock keeps sending while it fills.  The repeater's own
+# OTA resync timer is ~360 ms (6 bursts), where the old value of 6 came from;
+# how long to fill is a network question, not an RF one: a network call
+# pauses longer than 360 ms (internet jitter, a partner network stalling a
+# few hundred ms), and ending it at 360 ms cut live calls in two (the next
+# burst came back as a late entry, a new call to the repeater).  1.5 s is
+# MMDVMHost's network watchdog (DMRSlot m_networkWatchdog); it fills
+# silence until then.
+MAX_SYNTH_BURSTS = 25       # consecutive synthesized bursts → 1.5 s

@@ -890,7 +890,12 @@ class CallTranslator:
         new call already resets stale state inline (RTP discontinuity), so this
         is hygiene, not load-bearing.  Detection is coarse (it rides the ~5 s
         watchdog, so effective clearing is ~2-7 s) — fine for a dead-man.
+        HBP→IPSC waits longer: the delivery clock synthesizes the VOICE_TERM
+        (jitter_buffer_depth + MAX_SYNTH_BURSTS) slots after the last burst,
+        1.62 s at the default depth, 1.98 s at depth 8, and the dead-man must
+        not clear the call before that TERM goes out.
         """
+        in_timeout = max(timeout, (self._depth + MAX_SYNTH_BURSTS) * 0.060 + 0.5)
         now = time()
         for ts in (1, 2):
             if self._out_stream_id[ts] is not None:
@@ -903,7 +908,7 @@ class CallTranslator:
                     self._reset_out_call(ts)
             if self._in_lc[ts] is not None:
                 elapsed = now - self._in_last_pkt[ts]
-                if elapsed > timeout:
+                if elapsed > in_timeout:
                     log.warning(
                         'HBP→IPSC call timeout: ts=%d — no voice for %.1fs, clearing',
                         ts, elapsed,

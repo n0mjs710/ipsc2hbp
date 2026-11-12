@@ -627,7 +627,7 @@ Two per-timeslot structures feed the clock each slot:
 
 **`jitter_buffer_depth`** (`[hbp]`, default 2 = 120 ms, range 1–8) sets that delay. Deeper absorbs more inbound jitter at the cost of equal added call-setup latency: `1` (60 ms) for a clean LAN, `2` for typical paths, `3–8` (180–480 ms) for marginal / high-latency RF backhaul. PTT audio tolerates this comfortably.
 
-**Stream end / dead-man.** If `MAX_SYNTH_BURSTS` (6 ≈ 360 ms) consecutive slots are synthesized silence with no real audio, the clock synthesizes a `VOICE_TERM` and ends the call. A separate coarse watchdog (`check_call_timeouts`) clears any call still hung after ~2 s as hygiene.
+**Stream end / dead-man.** If `MAX_SYNTH_BURSTS` (25 ≈ 1.5 s) consecutive slots are synthesized silence with no real audio, the clock synthesizes a `VOICE_TERM` and ends the call. A shorter pause is jitter, not the end of the call: it is filled with silence at the 60 ms cadence and the call carries on, as MMDVMHost does for network voice (silence after 360 ms of lost audio, call end when its 1.5 s network watchdog expires). A separate coarse watchdog (`check_call_timeouts`) clears any call still hung after it as hygiene: ~2 s IPSC→HBP, and for HBP→IPSC 0.5 s after the synthesized `VOICE_TERM` would have gone out.
 
 ### 7.9 What HBP→IPSC reconstructs — and why IPSC needs it
 
