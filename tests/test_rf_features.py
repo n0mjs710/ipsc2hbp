@@ -275,7 +275,7 @@ class TestHbpToIpsc(unittest.TestCase):
         head2[16] ^= 0x0F
         burst = bytearray(head2)
         burst[15] = (burst[15] & 0xC0) | HBPF_FRAMETYPE_VOICESYNC
-        _run_hbp(tr, [self.head, bytes(term), bytes(head2), bytes(burst)], settle=0.8)
+        _run_hbp(tr, [self.head, bytes(term), bytes(head2), bytes(burst)], settle=2.0)  # stream timeout 1.5 s
         self.assertGreaterEqual(len(ip.sent), 4)
         self.assertEqual(ip.sent[1][30], 0x02)
         self.assertEqual(int.from_bytes(ip.sent[1][52:54], 'big'), 90 << 8)
